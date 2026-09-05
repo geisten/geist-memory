@@ -63,3 +63,8 @@ GEIST_EMBED_GGUF_PATH=path/to/model.gguf make test
 
 `GEISTLIB=../geistlib` by default; it becomes a pinned submodule once
 `geist_session_embed` lands in a geistlib release.
+
+## License
+
+Apache License 2.0 — the same terms as [geistlib](https://github.com/geisten/geistlib);
+see [LICENSE](LICENSE).
