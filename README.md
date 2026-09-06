@@ -2,167 +2,178 @@
   <img src="assets/header.png" alt="geist-memory" width="100%">
 </p>
 
-# geist-memory 🧠
+# geist-memory
 
-> **A semantic memory small enough to run permanently on a Raspberry Pi.**
-> No database, no server, no Python. geistlib and libc.
+A small, experimental C23 library for local semantic memory. It embeds text
+with geistlib, stores one sign bit per embedding component and searches by
+Hamming distance. No database, server, Python or additional third-party
+runtime is needed by geist-memory itself.
+
+The implementation keeps three flat data files, an undo journal for atomic
+replacement and explicit compaction. Search is exact **over the packed bits**;
+sign quantization is lossy and does not promise exact float-vector ranking.
+The whole store, including obsolete chunks, resides in RAM until compaction.
+
+## Build and use
+
+Requires GNU Make 3.81+, a C23 compiler (GCC 14+ or Clang 19+), Git and POSIX
+build tools. C23 library features have centralized GCC/Clang fallbacks where
+libc lacks `<stdckdint.h>` or `<stdbit.h>`. See [validation](docs/VALIDATION.md)
+for the compiler/platform combinations actually tested.
+
+```sh
+# Model-free tests need neither geistlib nor a GGUF model.
+make check
+make MODE=asan check fuzz
+
+# Provide an existing geistlib checkout containing the pinned revision.
+git clone https://github.com/geisten/geistlib ../geistlib
+make lib engine example
+make print-config
+```
+
+`GEISTLIB=/path/to/geistlib` selects the source repository. Make archives commit
+`32b432660948a50be05b355efa74a789456a37dd` into its own ignored build directory;
+it never changes the source checkout or downloads dependencies. `make lib`
+builds `libgeist_memory.a`; `make engine` builds `libgeist.a`. Artifacts live
+under `build/<target>/<mode>/<configuration>/`. Both archives are required
+when linking a consumer.
+
+The default is `BACKENDS=cpu_scalar GEMM_PROVIDER=native LINK=system`.
+Optional `cpu_neon` and `cpu_x86` backends must be selected explicitly and need
+their own runtime validation. macOS consumers also link system Accelerate and
+libSystem; no Homebrew OpenMP/BLAS runtime is required. `LINK=static` is an
+explicit Linux release profile and requires a toolchain with static libraries.
+It is rejected on macOS. `make check-linkage` inspects the actual consumer.
+
+```sh
+make CC=clang MODE=debug check
+make CC=gcc-14 TARGET=linux-x86_64 LINK=static check-linkage
+make CC=aarch64-linux-gnu-gcc TARGET=linux-aarch64 lib engine
+make TARGET=pi5 lib engine       # on a Pi 5 with a C23 compiler
+make check-install              # stage, compile and run an external consumer
+make install PREFIX=/usr DESTDIR=/tmp/geist-package
+make dist                       # normalized local package, licenses and hashes
+make check-package              # normalization, corruption and tool-failure tests
+make check-repro                # two fresh builds; compare complete packages
+```
+
+Cross-compiled tests must run on their target. `TARGET` is checked against the
+compiler target; ARM64 is never implicitly treated as a Pi 5. `CC`, `AR`,
+`RANLIB`, `CPPFLAGS`, `CFLAGS`, `LDFLAGS` and `LDLIBS` are configurable.
+Configuration changes select separate build directories. `make clean` removes
+only the resolved configuration; `make help` lists commands.
+
+## API example
 
 ```c
-struct gm *mem;
-gm_open("~/.geist/memory", "bitnet-embeddings-0.6b-bf16-i2_s.gguf",
-        &(struct gm_opts){.query_prefix = "query: "}, &mem);
+#include <geist_memory.h>
+#include <stdio.h>
 
-gm_remember_file(mem, "notes/arm-simd.md");
-
-struct gm_hit hits[5];
-size_t n;
-gm_recall(mem, 5, "what did we decide about ARM SIMD?", hits, &n);
-for (size_t i = 0; i < n; i++)
-    printf("%s #%u\n", gm_doc_path(mem, hits[i].doc), hits[i].chunk);
+int main(int argc, char **argv) {
+    if (argc != 2) return 2; /* argv[1]: an embedding GGUF supported by geistlib */
+    struct gm *memory = nullptr;
+    const struct gm_opts opts = {.query_prefix = "query: "};
+    enum gm_status s = gm_open("memory", argv[1], &opts, &memory);
+    if (s == GM_OK)
+        s = gm_remember_text(memory, "bread", "Yeast produces gas that lifts dough.");
+    struct gm_hit hits[5];
+    size_t n = 0;
+    if (s == GM_OK)
+        s = gm_recall(memory, 5, "why does bread rise?", hits, &n);
+    if (s == GM_OK)
+        for (size_t i = 0; i < n; ++i)
+            printf("%s #%u (%u bits)\n", gm_doc_path(memory, hits[i].doc),
+                   hits[i].chunk, hits[i].distance);
+    else
+        fprintf(stderr, "%s\n", gm_status_str(s));
+    gm_close(memory);
+    return s == GM_OK ? 0 : 1;
+}
 ```
 
-That is the whole surface. There is no daemon to start, no index to build,
-no schema to migrate.
+The compiled [CLI example](examples/memory.c) accepts
+`memory DIR MODEL remember ID TEXT` or `memory DIR MODEL recall QUERY`.
+Paths are literal: `~` expansion is the shell's responsibility. The store's
+parent directory must exist. Original document text is not stored.
 
-[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
-[![C Standard](https://img.shields.io/badge/C-C23-orange.svg)](https://en.wikipedia.org/wiki/C23_(C_standard_revision))
-[![Engine](https://img.shields.io/badge/engine-geistlib-8b93c8.svg)](https://github.com/geisten/geistlib)
-[![Status](https://img.shields.io/badge/status-experimental-yellow.svg)](#status)
+## Contracts
 
----
+- One single-threaded handle owns the directory; another returns `GM_E_BUSY`.
+- A document replacement prepares all embeddings before writing. An allocation
+  or engine failure preserves old logical content. `GM_E_UNCERTAIN` means close
+  and reopen for recovery; a failed operation may already have committed.
+- Source length/mtime never determines freshness. Re-indexing recomputes vectors;
+  identical packed vectors avoid writes. Empty text removes all live chunks
+  while keeping the document ID.
+- `gm_doc_path` is borrowed until the next mutating call or close. Use
+  `gm_doc_path_copy` for caller-owned storage. Check every fallible return value.
+- Documents: at most 262144 bytes and 65536 content tokens; IDs: 231 bytes;
+  queries including prefix: at most 4096 bytes and 256 content tokens. Overlong
+  input is rejected, never silently truncated. Explicit-length text rejects NUL.
+- Chunk windows contain at most 256 content tokens with 64-token overlap.
+  BOS/EOS wrapping and query prefix are model-specific. Defaults use available
+  BOS/EOS IDs; `omit_bos`/`omit_eos` override this. The pinned engine cannot expose
+  the model's add-token flags, so select the correct policy for your model.
+- Store memory defaults to 256 MiB, configurable via `max_store_bytes`.
+  Engine, input and embedding scratch are outside that budget.
+  `gm_get_stats` reports capacity bytes, data-file bytes and live/obsolete chunks.
+  `gm_compact` reclaims obsolete chunks while preserving IDs and ordered hits.
 
-## How it works
+Packages normalize entry order, ownership, permissions and timestamps. Set
+`SOURCE_DATE_EPOCH` (integer Unix seconds) to choose the timestamp; the default
+is 2000-01-01 UTC. Packaging requires GNU tar or bsdtar and gzip. Reproducibility requires matching source, configuration,
+compiler, tar and gzip implementations. Debug paths and cross-toolchain byte
+identity are outside this guarantee. `check-repro` requires release mode.
 
-Most retrieval stacks are five processes in a trench coat: an embedding
-server, a vector database, a cache, a queue, and glue. geist-memory is a
-static library with two moving parts.
+The [public header](include/geist_memory.h), [format and recovery contract](docs/FORMAT.md)
+and [design decisions](docs/DECISIONS.md) specify details and limits. In particular,
+v2 explicitly serializes little-endian bytes and checksums every header and record
+with SHA-256. The three data files remain; no external hashing library is needed.
+Checksums detect accidental corruption, not malicious rewriting or rollback.
 
-**1-bit embeddings.** Text goes through a ternary-weight embedding model on
-the [geist](https://github.com/geisten/geistlib) engine, and the resulting
-vector is kept as one bit per dimension — its sign. A 1024-dimensional
-embedding is **128 bytes**. The sign is what survives quantization best,
-because it is the one property that does not depend on scale, and cosine
-order over unit vectors is well approximated by Hamming distance over signs.
+Build `make import-tool` and run the resulting `memory-import-v1 SOURCE NEW_DESTINATION`
+to convert v1 into a new directory. Stop old writers first. Source data remains
+unchanged; existing destinations and pending v1 journals are refused. Import
+preserves the old model fingerprint: timestamp-based identities still require
+re-indexing original texts into a new directory for current model compatibility.
+See [import guarantees and failure handling](docs/FORMAT.md#importing-v1).
 
-**Three flat files.** The store is `vectors.gm`, `chunks.gm` and `docs.gm`,
-each a small header followed by fixed-size records. The array index *is* the
-file offset. That removes the index file, the parser, and the schema
-migration in one stroke — and it is why the store can be understood by
-reading two structs.
-
-Search is a `popcount` loop over the whole store. No ANN index, no
-clustering, no approximation: the answer is exact.
-
-## A library, not a service
-
-geist-memory does not watch your filesystem, run in the background, or own a
-port. It exposes six functions plus three accessors, and holds no state you
-cannot see. What
-watches, schedules or serves is the caller's business — and the caller is
-usually a shell pipeline:
+## Validation and status
 
 ```sh
-find ~/notes -name '*.md' | xargs -n1 geist-remember     # a 30-line caller
-history | geist-remember -
-git log --format=%B | geist-remember -
+make test                         # model-free core/store/format/import/quality tests
+make analyze                      # Clang static analysis, warnings fail
+make format-check                 # requires clang-format
+make fuzz-libfuzzer FUZZ_SECONDS=30 # coverage-guided fuzzing, Clang required
+make bench BENCH_CHUNKS=100000
+GEIST_EMBED_GGUF_PATH=/path/model.gguf make bench-model
+GEIST_EMBED_GGUF_PATH=/path/model.gguf make test-e2e
+GEIST_EMBED_GGUF_PATH=/path/model.gguf make release-check
 ```
 
-One collector ships: files, plus strings through `gm_remember_text`. Browser
-history, calendars and Home Assistant events have different half-lives than
-this code and do not belong inside it.
+`test-e2e` is model-specific: it expects a BitNet embedding GGUF and the default
+wrapping/query prefix. Missing models fail the mandatory Make target. The three
+English retrieval examples are a smoke test. `bench-model` adds an original
+DE/EN corpus and reports float-versus-sign Recall@1/3, MRR, model timings and RSS;
+see [model benchmark](docs/MODEL_BENCHMARK.md). This small fixture is not a
+representative multilingual benchmark. Model-free `test-quality` checks its
+ranking calculations and reports with an explicitly labelled mock engine.
 
-## Bring your own model
+Tests cover independent reference search, malformed files, allocation failures,
+short I/O, sync failures, interrupted replacement/creation/compaction and interrupted
+recovery. CI calls the same Make targets on Linux x86-64/ARM64, macOS ARM64 and
+Linux musl static. A workflow definition is not evidence of a successful run.
 
-Built against [microsoft/bitnet-embedding-0.6b][m] — a 1.58-bit multilingual
-embedding model, 1024 dimensions. Any GGUF that geistlib can embed with will
-work; pooling is read from the model's own metadata, so nothing here has to
-be told which kind it is.
+Native Linux/Pi tests, real-model results and float-versus-binary retrieval
+measurements remain release gates. This is not yet a finished showcase release.
+See [PLAN.md](PLAN.md) and [validation evidence](docs/VALIDATION.md).
 
-A store belongs to **one** model. Vectors from two models are not comparable
-at all, and mixing them yields confident nonsense rather than an error — so
-`gm_open` records the model's fingerprint and refuses a different one with
-`GM_E_MODEL`. Changing models means re-indexing.
+## Contributing and license
 
-[m]: https://huggingface.co/microsoft/bitnet-embedding-0.6b
+Keep patches small and contracts explicit; see [CONTRIBUTING.md](CONTRIBUTING.md).
+API and format remain experimental; changes are recorded in [CHANGELOG.md](CHANGELOG.md).
 
-## Build
-
-```sh
-git clone https://github.com/geisten/geistlib ../geistlib   # or set GEISTLIB=
-make                                                        # lib/<target>/release/libgeist_memory.a
-```
-
-`geist_session_embed` is still `EXPERIMENTAL` and unreleased in geistlib, so
-the engine is a path (`GEISTLIB=../geistlib`) rather than a pinned submodule.
-It becomes a submodule when the API lands in a release.
-
-```sh
-GEIST_EMBED_GGUF_PATH=path/to/model.gguf make test
-```
-
-The test is the only `main()` in the repository. It indexes three documents,
-asks three questions that share no vocabulary with their answers, closes and
-reopens the store, re-indexes a changed file, and checks that a store built
-by another model is refused:
-
-```
-model dim=1024 bits (128 bytes/vector)
-  "why does my loaf not rise?"                    -> doc_yeast.md    (d=296)
-  "what makes the sea level change twice a day?"  -> doc_tides.md    (d=260)
-  "how much of my instalment pays down the debt?" -> doc_mortgage.md (d=272)
-long text -> 21 chunks
-store built by another model -> refused
-```
-
-Clean under ASan and UBSan.
-
-## The store on disk
-
-```
-vectors.gm   32-byte header + one packed sign-bit vector per chunk
-chunks.gm    32-byte header + {doc, chunk, generation, n_tokens}
-docs.gm      32-byte header + {path, mtime, size, generation, n_chunks}
-```
-
-Re-indexing bumps a document's `generation`; recall skips chunks whose
-generation no longer matches. A changed file therefore stops matching
-immediately, without a compaction pass. The superseded vectors stay on disk —
-that is the shortcut, and reclaiming them is a rewrite of three append-only
-files rather than a migration.
-
-## Status
-
-**Experimental.** The library does what the test says it does, on the one
-model it was built against, on macOS and Linux. Known limits, all deliberate
-and all marked in the source:
-
-- **The Pi is the design target, not yet a measurement.** geistlib's own
-  BitNet numbers come from a 4 GB Pi 5; geist-memory has not been run there.
-  The arithmetic — 100k chunks is 12.8 MB of vectors — is not a benchmark.
-- **The whole store is resident.** Fine into the hundreds of thousands of
-  chunks; `mmap` when that stops fitting in the RAM you want to spend.
-- **The scan is linear.** An ANN index earns its place when a scan measurably
-  exceeds 100 ms, and not before.
-- **No compaction.** Dead vectors from re-indexed documents accumulate.
-- **Single-threaded, single-writer.** One handle, one thread, one process.
-
-## Where this is going
-
-In rough order: a thin `geist-remember` / `geist-recall` CLI so the shell
-pipelines above are real; a Pi 5 measurement to replace the arithmetic;
-compaction once a store has been abused long enough to need it. Watching the
-filesystem is deliberately last — a manual re-index over a tree is cheap and
-idempotent, and that has not yet become annoying enough to fix.
-
-## Contributing
-
-Small, boring patches welcome. The code follows geistlib's
-[AGENT.md](https://github.com/geisten/geistlib/blob/main/AGENT.md): lengths
-before the arrays they describe, `nullptr` over `NULL`, no silent truncation,
-and a deliberate shortcut carries a `ponytail:` comment naming its ceiling
-and its upgrade path.
-
-## License
-
-Apache License 2.0 — the same terms as
-[geistlib](https://github.com/geisten/geistlib); see [LICENSE](LICENSE).
+Apache-2.0: [LICENSE](LICENSE). geistlib is also Apache-2.0 and bundles stb code
+under its own notices. Installation includes the pinned engine's LICENSE and
+NOTICE. No model weights are distributed; their licenses are separate.
