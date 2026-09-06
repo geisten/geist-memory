@@ -127,17 +127,15 @@ still scanned for liveness until compaction.
 
 ## Pending release gates
 
-- Native Linux x86-64 and musl x86-64 runs remain pending. ARM64 was exercised
-  natively on Pi5 and in local Ubuntu/Alpine Linux VMs, without ISA emulation.
-- GitHub Actions acceptance is pending on the separate acceptance branch;
-  publication of the snapshot has been authorized. Results will be recorded here.
+- Native Intel macOS acceptance remains pending. Linux x86-64/ARM64,
+  musl-static x86-64/ARM64 and macOS ARM64 passed the GitHub matrix below.
 - The official 0.6B GGUF was downloaded and SHA-verified. Its prepared variant
   passes macOS and Pi5 E2E and produced real DE/EN measurements on macOS and Pi5. The
   preparation is exact for normalization values, but numerical equivalence of
   geistlib inference against Microsoft's reference implementation remains unproven.
 - The small DE/EN corpus is now measured. A larger representative corpus and
   agreed quality thresholds remain pending; see [MODEL_BENCHMARK.md](MODEL_BENCHMARK.md).
-- v2 checksums and source-preserving v1 import are locally tested. Fixtures passed on the tested ARM64 platforms; native x86-64 remains pending. Checksums are unkeyed, and the model identity still
+- v2 checksums and source-preserving v1 import are locally tested. Fixtures passed on macOS ARM64 and Linux x86-64/ARM64 with glibc and musl. Checksums are unkeyed, and the model identity still
   retains only 64 bits; neither authenticates data or prevents whole-store rollback.
 - macOS x86-64 is a build profile only; Windows remains outside the POSIX scope.
 
@@ -190,3 +188,25 @@ compaction. Recovery is attempted before and after releasing space; old contents
 must remain complete, and a subsequent commit/compact/reopen must succeed.
 Local tests used a 32-MiB HFS+ image; Linux tests used separate 32-MiB tmpfs mounts.
 These are filesystem-space failures, not physical-device power-loss simulations.
+
+## GitHub Actions acceptance on 2026-09-06
+
+[Run 34061808358](https://github.com/geisten/geist-memory/actions/runs/34061808358)
+passed all seven jobs for commit
+`57d355654b55934c55d20af1b8c52142656f163e` on the separate acceptance branch.
+No model files are part of this commit or downloaded by these CI jobs.
+
+| Native runner / environment | Coverage | Result |
+| --- | --- | --- |
+| Ubuntu 24.04 x86-64 and ARM64, GCC 14 | Model-free and format/import tests, C/C++ headers, consumer/link/install, examples, model-tool compilation, package tests, ASan/UBSan, deterministic fuzzing, real ENOSPC | Passed |
+| Ubuntu 24.04 x86-64 and ARM64, Clang 19 | Same checks, plus static analysis and coverage-guided ASan/UBSan fuzzing | Passed |
+| Alpine 3.22 on native x86-64 and ARM64 | Fully static consumer with no ELF INTERP/NEEDED, model-free and format/import tests, install, examples, model-tool compilation, package tests and real ENOSPC | Passed |
+| macOS 15 ARM64, Homebrew LLVM | Model-free and format/import tests, consumer/link/install, examples, model-tool compilation, package tests, ASan/UBSan, deterministic fuzzing, analysis, formatting and two fresh reproducible packages | Passed |
+
+Clang's 31-second fuzz runs executed 419167 inputs on x86-64 and 584123 on
+ARM64 without a finding. These counts describe this run, not an exhaustive
+correctness proof. Each Linux ENOSPC run passed all four scenarios on a
+dedicated 32-MiB tmpfs. The macOS runner image was explicitly
+`macos-15-arm64`; Intel macOS is a separate matrix entry using
+[GitHub's documented Intel label](https://docs.github.com/en/actions/reference/runners/github-hosted-runners).
+The real-model acceptance remains the separate macOS/Pi5 evidence above.

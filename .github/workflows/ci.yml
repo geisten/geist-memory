@@ -37,7 +37,11 @@ jobs:
       - if: matrix.cc == 'clang-19'
         run: make CC=clang-19 analyze fuzz-libfuzzer FUZZ_CC=clang-19 FUZZ_SECONDS=30
   macos:
-    runs-on: macos-15
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-15, macos-15-intel]
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/checkout@v4

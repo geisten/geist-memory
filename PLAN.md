@@ -7,7 +7,8 @@ trennt implementierte Arbeit von noch ausstehender Abnahme. Die Abschnitte darun
 enthalten jetzt einzelne Checkboxen: `[x]` bedeutet implementiert und im angegebenen
 Umfang geprüft; `[ ]` bedeutet offen. Die dokumentierte Abnahme umfasst jetzt macOS ARM64, echte Pi5-Hardware und
 Ubuntu-/Alpine-ARM64-Container sowie das echte BitNet-Embedding-0.6B-Modell.
-Native x86-64- und GitHub-Abnahme stehen weiterhin aus.
+GitHub Actions hat Linux x86-64/ARM64 (glibc und musl-static) sowie macOS ARM64
+abgenommen. Der zusätzliche Intel-macOS-Lauf steht noch aus.
 
 ## Umsetzungsstand
 
@@ -16,8 +17,8 @@ Native x86-64- und GitHub-Abnahme stehen weiterhin aus.
 | 0 | Make-Modi, gepinnte isolierte Engine, modellfreie Tests, Konfiguration | Abnahme frischer Umgebungen auf weiteren Plattformen |
 | 1 | Geprüfte Größen, Bounds, Hamming-Tails/Alignment, API-Lebensdauer, atomare Embedding-Vorbereitung | Keine bekannten reproduzierten Speicherfehler offen |
 | 2 | Writer-Lock, Undo-Journal, wiederholbare Recovery, Inhaltsidentität, explizites LE-v2-Format mit SHA-256 und v1-Import | Native Format-Abnahme auf weiteren Plattformen |
-| 3 | Referenztests, OOM/I/O/Crash-Tests einschließlich Recovery, Fuzzing, Analyse, CI-Definition | GitHub-CI-Läufe offen; echte Modellprüfung lokal bestanden |
-| 4 | Plattformprofile, statische Archive, Linux-static-Profil, externer Consumer, Installation, lokales Paket | Pi5 und Linux/musl ARM64 geprüft; native x86-64-Abnahme offen |
+| 3 | Referenztests, OOM/I/O/Crash-Tests einschließlich Recovery, Fuzzing, Analyse, CI-Definition | GitHub-CI unter Linux x86-64/ARM64 und macOS ARM64 bestanden; Intel-macOS offen |
+| 4 | Plattformprofile, statische Archive, Linux-static-Profil, externer Consumer, Installation, lokales Paket | Pi5, Linux/musl x86-64/ARM64 und macOS ARM64 geprüft; Intel-macOS offen |
 | 5 | Store-Budget, Statistiken, Kompaktierung, Scan-Benchmark, Modell-Messlauf und DE/EN-Testkorpus | Modell-/Pi-Messungen vorhanden; repräsentativer Qualitätsnachweis offen |
 | 6 | API-/Format-/Build-Dokumentation, CLI, Beitragsregeln, Änderungsnotizen | Vollständiges Release-Gate bleibt offen |
 
@@ -294,8 +295,8 @@ prüfbaren Zwischenstand; die jeweils nächste baut auf dessen Garantien auf.
 ### Fertig, wenn
 
 - [ ] Jedes zugesagte Profil besteht seine native Abnahme; Cross-Compile allein zählt nicht.
-- [x] Der Linux-musl-ARM64-Consumer läuft vollständig statisch; kein ELF-Interpreter
-  und keine dynamischen Abhängigkeiten. Native x86-64-Abnahme steht separat aus.
+- [x] Die Linux-musl-Consumer auf ARM64 und x86-64 laufen vollständig statisch;
+  kein ELF-Interpreter und keine dynamischen Abhängigkeiten.
 - [x] Pi5 mit GCC/Clang und generisches Linux ARM64 prüfen; Ubuntu ARM64 mit
   GCC/Clang/Sanitizern sowie Alpine musl-static bestehen die dokumentierten Tests.
 - [x] Der macOS-Consumer benötigt im Basisprofil keine Homebrew-Laufzeitbibliotheken.
