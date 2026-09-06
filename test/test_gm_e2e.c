@@ -24,7 +24,9 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include "geist_memory.h"
+#include "gm_store.h"
 
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -92,9 +94,12 @@ int main(void) {
         return T_FAIL;
     }
     /* Start from an empty store so a rerun is deterministic. */
-    (void) remove("build/test-store/vectors.gm");
-    (void) remove("build/test-store/chunks.gm");
-    (void) remove("build/test-store/docs.gm");
+    static const char *const STORE_FILES[] = {"vectors.gm", "chunks.gm", "docs.gm"};
+    for (size_t i = 0; i < sizeof STORE_FILES / sizeof STORE_FILES[0]; i++) {
+        char p[600];
+        snprintf(p, sizeof p, "%s/%s", DIR, STORE_FILES[i]);
+        (void) remove(p);
+    }
 
     write_file("build/doc_yeast.md",
                "# Bread\n\nYeast ferments the sugars in dough. The carbon dioxide it "
@@ -167,8 +172,9 @@ int main(void) {
     check(ends_with(now, "doc_yeast.md"), "the new content is findable");
     const char *stale = ask(m, "why does my loaf not rise?", nullptr);
     printf("  the old question now lands on: %s\n", stale ? stale : "(nothing)");
-    check(!ends_with(stale, "doc_yeast.md") || gm_chunk_count(m) > after_first,
-          "the superseded chunks no longer win");
+    check(!ends_with(stale, "doc_yeast.md"), "the superseded content no longer matches");
+    check(gm_chunk_count(m) == after_first,
+          "one chunk died and one was born — the live count is unchanged");
 
     /* ---- chunking ------------------------------------------------------- */
     {
@@ -201,13 +207,13 @@ int main(void) {
      * fingerprint on disk: that is exactly the state a swapped model
      * produces, and it is what the guard has to catch.
      *
-     * The offset mirrors struct gm_file_header in src/gm_store.h
-     * (magic, version, dim, rec_size, count, model_fp). */
+     * The offset comes from the struct itself, so reordering a header field
+     * cannot leave this poking at the wrong bytes and passing anyway. */
     {
-        const long MODEL_FP_OFF = 4 + 4 + 4 + 4 + 8;
-        char vpath[600];
+        const long MODEL_FP_OFF = (long) offsetof(struct gm_file_header, model_fp);
+        char       vpath[600];
         snprintf(vpath, sizeof vpath, "%s/vectors.gm", DIR);
-        FILE *f = fopen(vpath, "r+b");
+        FILE      *f = fopen(vpath, "r+b");
         check(f != nullptr, "the store's vector file is readable");
         if (f != nullptr) {
             uint64_t fp = 0;

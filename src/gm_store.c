@@ -3,24 +3,58 @@
 #include "gm_store.h"
 
 #include <errno.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 
-/* The three files, in the order gm_store_open touches them. */
-enum { GM_F_VECS = 0, GM_F_CHUNKS, GM_F_DOCS, GM_F_COUNT };
-static const char *const GM_FILES[GM_F_COUNT] = {"vectors.gm", "chunks.gm", "docs.gm"};
+struct gm_chunk_rec {
+    uint32_t doc;
+    uint32_t chunk;      /* ordinal within the document */
+    uint32_t generation; /* must equal the doc's, else the chunk is dead */
+    uint32_t reserved;   /* keeps the stride 16; not read, not written */
+};
 
-static void join(char out[static 640], const char *dir, const char *name) {
-    snprintf(out, 640, "%s/%s", dir, name);
-}
+struct gm_doc_rec {
+    char     path[GM_PATH_MAX];
+    int64_t  mtime;
+    uint64_t size;
+    uint32_t generation; /* bumped on re-index; older chunks stop matching */
+    uint32_t reserved;
+};
 
-/* Read a whole file into `*out` (malloc'd) and its length into `*out_len`.
- * A missing file is not an error: it yields a null pointer and length 0,
- * which is how gm_store_open tells "new store" from "broken store". */
-static enum gm_status slurp(const char *path, uint8_t **out, size_t *out_len) {
+/* One append target: the handle stays open for the life of the store, so an
+ * append is a seek and two writes rather than an open/close pair. */
+struct gm_file {
+    FILE  *fh;
+    size_t rec_size;
+};
+
+struct gm_store {
+    size_t   dim;   /* bits */
+    size_t   bytes; /* dim / 8 */
+    uint64_t model_fp;
+
+    struct gm_file vec_f, chunk_f, doc_f;
+
+    uint8_t             *vecs;   /* n_chunks × bytes */
+    struct gm_chunk_rec *chunks; /* n_chunks */
+    struct gm_doc_rec   *docs;   /* n_docs */
+    size_t               n_chunks, cap_chunks;
+    size_t               n_docs, cap_docs;
+};
+
+static const char *const VECS_NAME   = "vectors.gm";
+static const char *const CHUNKS_NAME = "chunks.gm";
+static const char *const DOCS_NAME   = "docs.gm";
+
+/* dir[] is bounded by the caller's check in gm_store_open; the longest name
+ * above plus a separator is 11 bytes. */
+enum { GM_DIR_MAX = 512u, GM_PATHBUF = GM_DIR_MAX + 16u };
+
+enum gm_status gm_read_file(const char *path, uint8_t **out, size_t *out_len) {
     *out     = nullptr;
     *out_len = 0;
     FILE *f  = fopen(path, "rb");
@@ -36,8 +70,10 @@ static enum gm_status slurp(const char *path, uint8_t **out, size_t *out_len) {
         fclose(f);
         return GM_E_IO;
     }
-    uint8_t *buf = (n > 0) ? malloc((size_t) n) : nullptr;
-    if (n > 0 && buf == nullptr) {
+    /* One byte over, always NUL: the store path ignores it and the text
+     * path gets a C string without a second reader. */
+    uint8_t *buf = malloc((size_t) n + 1u);
+    if (buf == nullptr) {
         fclose(f);
         return GM_E_OOM;
     }
@@ -47,48 +83,16 @@ static enum gm_status slurp(const char *path, uint8_t **out, size_t *out_len) {
         return GM_E_IO;
     }
     fclose(f);
+    buf[n]   = '\0';
     *out     = buf;
     *out_len = (size_t) n;
     return GM_OK;
 }
 
-/* Append `len` bytes and update the header's count in place. Both writes
- * are flushed before returning: a crash between them loses the last chunk,
- * which re-indexing restores, whereas a count ahead of its data would make
- * the store unreadable. */
-static enum gm_status append_rec(const char *path, const void *rec, size_t len, uint64_t new_count) {
-    FILE *f = fopen(path, "r+b");
-    if (f == nullptr) {
-        return GM_E_IO;
-    }
-    int ok = fseek(f, 0, SEEK_END) == 0 && fwrite(rec, 1, len, f) == len && fflush(f) == 0;
-    if (ok) {
-        ok = fseek(f, (long) offsetof(struct gm_file_header, count), SEEK_SET) == 0 &&
-             fwrite(&new_count, sizeof new_count, 1, f) == 1;
-    }
-    if (fclose(f) != 0) {
-        ok = 0;
-    }
-    return ok ? GM_OK : GM_E_IO;
-}
-
-static enum gm_status create_file(const char *path, const struct gm_file_header *h) {
-    FILE *f = fopen(path, "wb");
-    if (f == nullptr) {
-        return GM_E_IO;
-    }
-    const int ok = fwrite(h, sizeof *h, 1, f) == 1;
-    return (fclose(f) == 0 && ok) ? GM_OK : GM_E_IO;
-}
-
-/* Validate a loaded file and hand back a pointer to its record area. */
-static enum gm_status take(const uint8_t                *buf,
-                           size_t                        len,
-                           size_t                        rec_size,
-                           size_t                        dim,
-                           uint64_t                      model_fp,
-                           const uint8_t               **out_recs,
-                           size_t                       *out_count) {
+/* Validate a loaded file's header and report how many records follow. */
+static enum gm_status validate_header(
+        const uint8_t *buf, size_t len, size_t rec_size, size_t dim, uint64_t model_fp,
+        size_t *out_count) {
     if (len < sizeof(struct gm_file_header)) {
         return GM_E_FORMAT;
     }
@@ -100,103 +104,148 @@ static enum gm_status take(const uint8_t                *buf,
     if (h.dim != dim || h.model_fp != model_fp) {
         return GM_E_MODEL;
     }
-    if (len - sizeof h < h.count * rec_size) {
+    if ((len - sizeof h) / rec_size < h.count) {
         return GM_E_FORMAT; /* truncated: the header promises more than exists */
     }
-    *out_recs  = buf + sizeof h;
     *out_count = (size_t) h.count;
     return GM_OK;
 }
 
-enum gm_status
-gm_store_open(struct gm_store *st, const char *dir, size_t dim, uint64_t model_fp) {
-    if (st == nullptr || dir == nullptr || dim == 0 || dim % 8u != 0u) {
+/* Open one of the three files, creating it with a fresh header when absent,
+ * and hand back its records copied into a growable array. */
+static enum gm_status open_file(const char     *dir,
+                                const char     *name,
+                                size_t          rec_size,
+                                size_t          dim,
+                                uint64_t        model_fp,
+                                struct gm_file *out_file,
+                                void          **out_recs,
+                                size_t         *out_count) {
+    char path[GM_PATHBUF];
+    snprintf(path, sizeof path, "%s/%s", dir, name);
+
+    *out_recs         = nullptr;
+    *out_count        = 0;
+    out_file->fh      = nullptr;
+    out_file->rec_size = rec_size;
+
+    uint8_t       *buf = nullptr;
+    size_t         len = 0;
+    enum gm_status s   = gm_read_file(path, &buf, &len);
+    if (s != GM_OK) {
+        return s;
+    }
+    if (buf == nullptr) {
+        const struct gm_file_header h = {.magic    = GM_MAGIC,
+                                         .version  = GM_VERSION,
+                                         .dim      = (uint32_t) dim,
+                                         .rec_size = (uint32_t) rec_size,
+                                         .count    = 0,
+                                         .model_fp = model_fp};
+        FILE                       *f = fopen(path, "w+b");
+        if (f == nullptr) {
+            return GM_E_IO;
+        }
+        if (fwrite(&h, sizeof h, 1, f) != 1 || fflush(f) != 0) {
+            fclose(f);
+            return GM_E_IO;
+        }
+        out_file->fh = f;
+        return GM_OK;
+    }
+
+    s = validate_header(buf, len, rec_size, dim, model_fp, out_count);
+    if (s != GM_OK) {
+        free(buf);
+        return s;
+    }
+    const size_t bytes = *out_count * rec_size;
+    if (bytes > 0) {
+        void *dst = malloc(bytes);
+        if (dst == nullptr) {
+            free(buf);
+            return GM_E_OOM;
+        }
+        memcpy(dst, buf + sizeof(struct gm_file_header), bytes);
+        *out_recs = dst;
+    }
+    free(buf);
+
+    out_file->fh = fopen(path, "r+b");
+    return out_file->fh != nullptr ? GM_OK : GM_E_IO;
+}
+
+/* Append `len` bytes and update the header's count in place. Both writes
+ * are flushed before returning: a crash between them loses the last record,
+ * which re-indexing restores, whereas a count ahead of its data would make
+ * the store unreadable. */
+static enum gm_status append_rec(struct gm_file *f, const void *rec, size_t len, uint64_t count) {
+    bool ok = fseek(f->fh, 0, SEEK_END) == 0 && fwrite(rec, 1, len, f->fh) == len &&
+              fflush(f->fh) == 0;
+    if (ok) {
+        ok = fseek(f->fh, (long) offsetof(struct gm_file_header, count), SEEK_SET) == 0 &&
+             fwrite(&count, sizeof count, 1, f->fh) == 1 && fflush(f->fh) == 0;
+    }
+    return ok ? GM_OK : GM_E_IO;
+}
+
+/* Rewrite record `idx` where it already sits. */
+static enum gm_status write_rec_at(struct gm_file *f, size_t idx, const void *rec) {
+    const long off = (long) (sizeof(struct gm_file_header) + idx * f->rec_size);
+    const bool ok  = fseek(f->fh, off, SEEK_SET) == 0 &&
+                    fwrite(rec, f->rec_size, 1, f->fh) == 1 && fflush(f->fh) == 0;
+    return ok ? GM_OK : GM_E_IO;
+}
+
+enum gm_status gm_store_open(const char *dir, size_t dim, uint64_t model_fp, struct gm_store **out) {
+    *out = nullptr;
+    if (dir == nullptr || dim == 0 || dim % 8u != 0u) {
         return GM_E_INVALID_ARG;
     }
-    if (strlen(dir) >= sizeof st->dir) {
+    if (strlen(dir) >= GM_DIR_MAX) {
         return GM_E_TOO_LONG;
     }
-    memset(st, 0, sizeof *st);
-    snprintf(st->dir, sizeof st->dir, "%s", dir);
+    struct gm_store *st = calloc(1, sizeof *st);
+    if (st == nullptr) {
+        return GM_E_OOM;
+    }
     st->dim      = dim;
     st->bytes    = dim / 8u;
     st->model_fp = model_fp;
 
     if (mkdir(dir, 0700) != 0 && errno != EEXIST) {
+        gm_store_close(st);
         return GM_E_IO;
     }
 
-    const size_t rec_size[GM_F_COUNT] = {
-            st->bytes, sizeof(struct gm_chunk_rec), sizeof(struct gm_doc_rec)};
-
-    for (int i = 0; i < GM_F_COUNT; i++) {
-        char path[640];
-        join(path, dir, GM_FILES[i]);
-
-        uint8_t       *buf = nullptr;
-        size_t         len = 0;
-        enum gm_status s   = slurp(path, &buf, &len);
-        if (s != GM_OK) {
-            gm_store_close(st);
-            return s;
-        }
-        if (buf == nullptr) {
-            const struct gm_file_header h = {.magic    = GM_MAGIC,
-                                             .version  = GM_VERSION,
-                                             .dim      = (uint32_t) dim,
-                                             .rec_size = (uint32_t) rec_size[i],
-                                             .count    = 0,
-                                             .model_fp = model_fp};
-            s                             = create_file(path, &h);
-            if (s != GM_OK) {
-                gm_store_close(st);
-                return s;
-            }
-            continue;
-        }
-        const uint8_t *recs  = nullptr;
-        size_t         count = 0;
-        s = take(buf, len, rec_size[i], dim, model_fp, &recs, &count);
-        if (s != GM_OK) {
-            free(buf);
-            gm_store_close(st);
-            return s;
-        }
-        /* Copy out of the file image into the growable array, then drop the
-         * image — the arrays are what append writes into. */
-        void  *dst   = nullptr;
-        size_t bytes = count * rec_size[i];
-        if (count > 0) {
-            dst = malloc(bytes);
-            if (dst == nullptr) {
-                free(buf);
-                gm_store_close(st);
-                return GM_E_OOM;
-            }
-            memcpy(dst, recs, bytes);
-        }
-        free(buf);
-        switch (i) {
-        case GM_F_VECS:
-            st->vecs       = dst;
-            st->n_chunks   = count;
-            st->cap_chunks = count;
-            break;
-        case GM_F_CHUNKS:
-            if (count != st->n_chunks) {
-                free(dst);
-                gm_store_close(st);
-                return GM_E_FORMAT; /* vectors and records disagree */
-            }
-            st->chunks = dst;
-            break;
-        default:
-            st->docs     = dst;
-            st->n_docs   = count;
-            st->cap_docs = count;
-            break;
-        }
+    size_t         n_vecs = 0;
+    void          *vecs = nullptr, *chunks = nullptr, *docs = nullptr;
+    enum gm_status s =
+            open_file(dir, VECS_NAME, st->bytes, dim, model_fp, &st->vec_f, &vecs, &n_vecs);
+    if (s == GM_OK) {
+        s = open_file(dir, CHUNKS_NAME, sizeof(struct gm_chunk_rec), dim, model_fp, &st->chunk_f,
+                      &chunks, &st->n_chunks);
     }
+    if (s == GM_OK) {
+        s = open_file(dir, DOCS_NAME, sizeof(struct gm_doc_rec), dim, model_fp, &st->doc_f, &docs,
+                      &st->n_docs);
+    }
+    if (s == GM_OK && n_vecs != st->n_chunks) {
+        s = GM_E_FORMAT; /* vectors and records disagree */
+    }
+    if (s != GM_OK) {
+        free(vecs);
+        free(chunks);
+        free(docs);
+        gm_store_close(st);
+        return s;
+    }
+    st->vecs       = vecs;
+    st->chunks     = chunks;
+    st->docs       = docs;
+    st->cap_chunks = st->n_chunks;
+    st->cap_docs   = st->n_docs;
+    *out           = st;
     return GM_OK;
 }
 
@@ -204,15 +253,55 @@ void gm_store_close(struct gm_store *st) {
     if (st == nullptr) {
         return;
     }
+    struct gm_file *files[] = {&st->vec_f, &st->chunk_f, &st->doc_f};
+    for (size_t i = 0; i < sizeof files / sizeof files[0]; i++) {
+        if (files[i]->fh != nullptr) {
+            fclose(files[i]->fh);
+        }
+    }
     free(st->vecs);
     free(st->chunks);
     free(st->docs);
-    st->vecs   = nullptr;
-    st->chunks = nullptr;
-    st->docs   = nullptr;
+    free(st);
 }
 
-size_t gm_store_find_doc(const struct gm_store *st, const char *path) {
+size_t gm_store_dim(const struct gm_store *st) {
+    return st->dim;
+}
+
+size_t gm_store_bytes(const struct gm_store *st) {
+    return st->bytes;
+}
+
+bool gm_store_path_too_long(const char *path) {
+    return strlen(path) >= GM_PATH_MAX;
+}
+
+const char *gm_store_doc_path(const struct gm_store *st, uint32_t doc) {
+    return doc < st->n_docs ? st->docs[doc].path : nullptr;
+}
+
+/* A chunk counts only while its document has not been re-indexed under it.
+ * The predicate lives here, next to the two arrays it joins, so no caller
+ * can forget it and read a dead vector as a real hit. */
+static bool chunk_live(const struct gm_store *st, size_t i) {
+    const struct gm_chunk_rec *rec = &st->chunks[i];
+    return rec->generation == st->docs[rec->doc].generation;
+}
+
+size_t gm_store_live_chunks(const struct gm_store *st) {
+    size_t n = 0;
+    for (size_t i = 0; i < st->n_chunks; i++) {
+        n += chunk_live(st, i) ? 1u : 0u;
+    }
+    return n;
+}
+
+static size_t find_doc(const struct gm_store *st, const char *path) {
+    /* ponytail: linear strcmp. O(n_docs) per document, so indexing a tree is
+     * quadratic in the number of files — measured 4.9 ms at 1k docs, 615 ms
+     * at 20k. Add a path hash map when a tree pass is visibly slow; one
+     * lookup per document (not two) is what makes that threshold reachable. */
     for (size_t i = 0; i < st->n_docs; i++) {
         if (strcmp(st->docs[i].path, path) == 0) {
             return i;
@@ -221,86 +310,74 @@ size_t gm_store_find_doc(const struct gm_store *st, const char *path) {
     return SIZE_MAX;
 }
 
-static enum gm_status grow(void **p, size_t *cap, size_t need, size_t elem) {
-    if (need <= *cap) {
-        return GM_OK;
-    }
-    size_t next = *cap ? *cap * 2u : 64u;
+static size_t next_cap(size_t cap, size_t need) {
+    size_t next = cap ? cap * 2u : 64u;
     while (next < need) {
         next *= 2u;
     }
-    void *q = realloc(*p, next * elem);
-    if (q == nullptr) {
-        return GM_E_OOM;
-    }
-    *p   = q;
-    *cap = next;
-    return GM_OK;
+    return next;
 }
 
 /* The vector array and the chunk-record array are indexed in lockstep, so
- * they share one capacity and grow together. Two separate grows with two
- * separate capacities is exactly the bug this replaced: the second call saw
- * the capacity the first had already raised and allocated nothing. */
+ * they share one capacity and grow together, and the capacity advances only
+ * once both reallocs have succeeded. Two separate grows against two
+ * capacities is exactly the desync this shape prevents. */
 [[nodiscard]] static enum gm_status reserve_chunks(struct gm_store *st, size_t need) {
     if (need <= st->cap_chunks) {
         return GM_OK;
     }
-    size_t next = st->cap_chunks ? st->cap_chunks * 2u : 64u;
-    while (next < need) {
-        next *= 2u;
-    }
-    uint8_t *v = realloc(st->vecs, next * st->bytes);
+    const size_t next = next_cap(st->cap_chunks, need);
+    uint8_t     *v    = realloc(st->vecs, next * st->bytes);
     if (v == nullptr) {
         return GM_E_OOM;
     }
     st->vecs               = v;
     struct gm_chunk_rec *c = realloc(st->chunks, next * sizeof *c);
     if (c == nullptr) {
-        return GM_E_OOM; /* st->vecs keeps the larger block; cap_chunks is
-                          * not advanced, so the next attempt retries both. */
+        return GM_E_OOM; /* vecs keeps the larger block; cap_chunks is not
+                          * advanced, so the next attempt retries both. */
     }
     st->chunks     = c;
     st->cap_chunks = next;
     return GM_OK;
 }
 
-enum gm_status gm_store_put_doc(
-        struct gm_store *st, const char *path, int64_t mtime, uint64_t size, size_t *out_doc) {
-    if (strlen(path) >= GM_PATH_MAX) {
+enum gm_status gm_store_put_doc(struct gm_store   *st,
+                                const char        *path,
+                                int64_t            mtime,
+                                uint64_t           size,
+                                size_t            *out_doc,
+                                enum gm_doc_state *out_state) {
+    if (gm_store_path_too_long(path)) {
         return GM_E_TOO_LONG;
     }
-    char file[640];
-    join(file, st->dir, GM_FILES[GM_F_DOCS]);
-
-    const size_t found = gm_store_find_doc(st, path);
+    const size_t found = find_doc(st, path);
     if (found != SIZE_MAX) {
-        /* Re-index: bump the generation so the old chunks stop matching and
-         * rewrite the record in place. ponytail: their vectors stay on disk
-         * as dead weight. Compact when the store is visibly bloated — a
-         * rewrite of three append-only files, not a migration. */
         struct gm_doc_rec *d = &st->docs[found];
+        *out_doc             = found;
+        if (d->mtime == mtime && d->size == size) {
+            *out_state = GM_DOC_UNCHANGED;
+            return GM_OK;
+        }
+        /* Re-index: bump the generation so the old chunks stop matching, and
+         * rewrite the record where it sits. ponytail: their vectors stay on
+         * disk as dead weight. Compact when a store is visibly bloated — a
+         * rewrite of three append-only files, not a migration. */
         d->generation++;
-        d->mtime    = mtime;
-        d->size     = size;
-        d->n_chunks = 0;
-        FILE *f     = fopen(file, "r+b");
-        if (f == nullptr) {
-            return GM_E_IO;
-        }
-        const long off = (long) (sizeof(struct gm_file_header) + found * sizeof *d);
-        const int  ok  = fseek(f, off, SEEK_SET) == 0 && fwrite(d, sizeof *d, 1, f) == 1;
-        if (fclose(f) != 0 || !ok) {
-            return GM_E_IO;
-        }
-        *out_doc = found;
-        return GM_OK;
+        d->mtime   = mtime;
+        d->size    = size;
+        *out_state = GM_DOC_REINDEXED;
+        return write_rec_at(&st->doc_f, found, d);
     }
 
-    enum gm_status s = grow((void **) &st->docs, &st->cap_docs, st->n_docs + 1u,
-                            sizeof(struct gm_doc_rec));
-    if (s != GM_OK) {
-        return s;
+    if (st->n_docs + 1u > st->cap_docs) {
+        const size_t       next = next_cap(st->cap_docs, st->n_docs + 1u);
+        struct gm_doc_rec *d    = realloc(st->docs, next * sizeof *d);
+        if (d == nullptr) {
+            return GM_E_OOM;
+        }
+        st->docs     = d;
+        st->cap_docs = next;
     }
     struct gm_doc_rec *d = &st->docs[st->n_docs];
     memset(d, 0, sizeof *d);
@@ -308,18 +385,18 @@ enum gm_status gm_store_put_doc(
     d->mtime      = mtime;
     d->size       = size;
     d->generation = 1;
-    d->n_chunks   = 0;
 
-    s = append_rec(file, d, sizeof *d, (uint64_t) (st->n_docs + 1u));
+    const enum gm_status s = append_rec(&st->doc_f, d, sizeof *d, (uint64_t) (st->n_docs + 1u));
     if (s != GM_OK) {
         return s;
     }
-    *out_doc = st->n_docs++;
+    *out_doc   = st->n_docs++;
+    *out_state = GM_DOC_NEW;
     return GM_OK;
 }
 
-enum gm_status gm_store_put_chunk(
-        struct gm_store *st, size_t doc, uint32_t chunk, uint32_t n_tokens, const uint8_t *bits) {
+enum gm_status
+gm_store_put_chunk(struct gm_store *st, size_t doc, uint32_t chunk, const uint8_t *bits) {
     if (doc >= st->n_docs) {
         return GM_E_INVALID_ARG;
     }
@@ -327,19 +404,14 @@ enum gm_status gm_store_put_chunk(
     if (s != GM_OK) {
         return s;
     }
+    const struct gm_chunk_rec rec = {.doc        = (uint32_t) doc,
+                                     .chunk      = chunk,
+                                     .generation = st->docs[doc].generation};
 
-    struct gm_chunk_rec rec = {.doc        = (uint32_t) doc,
-                               .chunk      = chunk,
-                               .generation = st->docs[doc].generation,
-                               .n_tokens   = n_tokens};
-
-    char vfile[640], cfile[640];
-    join(vfile, st->dir, GM_FILES[GM_F_VECS]);
-    join(cfile, st->dir, GM_FILES[GM_F_CHUNKS]);
     const uint64_t next = (uint64_t) (st->n_chunks + 1u);
-    s                   = append_rec(vfile, bits, st->bytes, next);
+    s                   = append_rec(&st->vec_f, bits, st->bytes, next);
     if (s == GM_OK) {
-        s = append_rec(cfile, &rec, sizeof rec, next);
+        s = append_rec(&st->chunk_f, &rec, sizeof rec, next);
     }
     if (s != GM_OK) {
         return s;
@@ -347,6 +419,49 @@ enum gm_status gm_store_put_chunk(
     memcpy(st->vecs + st->n_chunks * st->bytes, bits, st->bytes);
     st->chunks[st->n_chunks] = rec;
     st->n_chunks++;
-    st->docs[doc].n_chunks++;
+    return GM_OK;
+}
+
+enum gm_status gm_store_scan(struct gm_store *st,
+                             size_t           k,
+                             const uint8_t   *query_bits,
+                             struct gm_hit    out[static k],
+                             size_t          *n_out) {
+    *n_out = 0;
+    if (k == 0 || query_bits == nullptr) {
+        return GM_E_INVALID_ARG;
+    }
+    /* ponytail: brute-force popcount scan, no index. 1024-bit vectors are
+     * 128 B, so 100k chunks is 12.8 MB streamed once — about 1 ms, and it is
+     * exact. Reach for an ANN index when a scan measurably exceeds 100 ms. */
+    const uint64_t *q     = (const uint64_t *) (const void *) query_bits;
+    const size_t    words = st->bytes / 8u;
+
+    size_t n = 0;
+    for (size_t i = 0; i < st->n_chunks; i++) {
+        if (!chunk_live(st, i)) {
+            continue;
+        }
+        const uint64_t *v = (const uint64_t *) (const void *) (st->vecs + i * st->bytes);
+        uint32_t        d = 0;
+        for (size_t w = 0; w < words; w++) {
+            d += (uint32_t) __builtin_popcountll(q[w] ^ v[w]);
+        }
+        /* Insertion into the top-k. k is a handful, so this beats sorting
+         * the whole store and allocates nothing. */
+        if (n < k || d < out[n - 1].distance) {
+            size_t pos = (n < k) ? n : k - 1;
+            while (pos > 0 && out[pos - 1].distance > d) {
+                out[pos] = out[pos - 1];
+                pos--;
+            }
+            out[pos] = (struct gm_hit) {
+                    .doc = st->chunks[i].doc, .chunk = st->chunks[i].chunk, .distance = d};
+            if (n < k) {
+                n++;
+            }
+        }
+    }
+    *n_out = n;
     return GM_OK;
 }

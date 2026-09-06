@@ -5,7 +5,6 @@
 #include <geist.h>
 #include <geist_util.h>
 
-#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -17,21 +16,31 @@
  * boundary retrievable from either side. */
 enum { GM_CHUNK_TOKENS = 256u, GM_CHUNK_OVERLAP = 64u };
 
-/* Refuse rather than truncate (a truncated document is a silently wrong
- * answer later). Generous enough for any note or source file. */
-enum { GM_MAX_DOC_BYTES = 4u * 1024u * 1024u, GM_MAX_DOC_TOKENS = 65536u };
+/* One document admission limit, in tokens, because that is the buffer that
+ * actually bounds the work. The byte cap is derived from it at four bytes
+ * per token — comfortably above the ratio any real text reaches — and a
+ * document that still tokenizes to the full budget is refused rather than
+ * silently indexed short (AGENT.md §5: no silent truncation).
+ *
+ * ponytail: the whole document's tokens are held at once. Stream the
+ * tokenizer if documents past a megabyte ever matter. */
+enum {
+    GM_MAX_DOC_TOKENS = 65536u,
+    GM_MAX_DOC_BYTES  = GM_MAX_DOC_TOKENS * 4u,
+};
 
 struct gm {
-    struct gm_store       store;
+    struct gm_store      *store;
     struct geist_backend *be;
     struct geist_model   *model;
     struct geist_session *sess;
     char                  query_prefix[128];
 
-    float         *vec;      /* [dim] scratch for one embedding */
-    uint8_t       *bits;     /* [dim/8] scratch for its packed form */
-    geist_token_t *ids;      /* [GM_MAX_DOC_TOKENS] whole-document tokens */
-    geist_token_t *window;   /* [GM_CHUNK_TOKENS + 2] one chunk plus BOS/EOS */
+    size_t         dim;    /* embedding width in bits, = the store's */
+    float         *vec;    /* [dim] scratch for one embedding */
+    uint8_t       *bits;   /* [dim/8] its packed form */
+    geist_token_t *ids;    /* [GM_MAX_DOC_TOKENS] whole-document tokens */
+    geist_token_t *window; /* [GM_CHUNK_TOKENS + 2] one chunk plus BOS/EOS */
 };
 
 const char *gm_status_str(enum gm_status s) {
@@ -54,12 +63,15 @@ const char *gm_status_str(enum gm_status s) {
  * it exists to stop an accidental mix, not a deliberate one. */
 static uint64_t model_fingerprint(const char *model_path, size_t dim) {
     struct stat sb;
-    uint64_t    h = 1469598103934665603ULL;
+    if (stat(model_path, &sb) != 0) {
+        memset(&sb, 0, sizeof sb);
+    }
     const uint64_t parts[3] = {
-            (stat(model_path, &sb) == 0) ? (uint64_t) sb.st_size : 0u,
-            (stat(model_path, &sb) == 0) ? (uint64_t) sb.st_mtime : 0u,
+            (uint64_t) sb.st_size,
+            (uint64_t) sb.st_mtime,
             (uint64_t) dim,
     };
+    uint64_t h = 1469598103934665603ULL;
     for (size_t i = 0; i < 3; i++) {
         for (int b = 0; b < 8; b++) {
             h ^= (parts[i] >> (b * 8)) & 0xffu;
@@ -82,44 +94,67 @@ static void pack_signs(size_t dim, const float v[static dim], uint8_t out[static
     }
 }
 
-/* Tokenize `text`, wrap it in the model's own BOS/EOS, embed, pack. The
- * specials are the model's convention and geist_session_tokenize leaves
- * them to the caller by design. */
-static enum gm_status embed_window(struct gm           *m,
-                                   size_t               n,
-                                   const geist_token_t *ids,
-                                   uint8_t             *out_bits) {
-    const geist_token_t bos = geist_model_bos_token(m->model);
-    const geist_token_t eos = geist_model_eos_token(m->model);
-    size_t              k   = 0;
-    if (bos != GEIST_TOKEN_NONE) {
-        m->window[k++] = bos;
+/* Run `n` tokens through the model and leave the packed signs in m->bits.
+ *
+ * The specials come from the model's own tokenizer metadata rather than a
+ * guess: geist_session_tokenize returns content tokens by design, and for a
+ * pooled vector the wrapping is not cosmetic — a sequence one token short of
+ * the model's convention pools to a different vector. */
+static enum gm_status embed_window(struct gm *m, size_t n, const geist_token_t *ids) {
+    size_t k = 0;
+    if (geist_model_add_bos(m->model)) {
+        const geist_token_t bos = geist_model_bos_token(m->model);
+        if (bos != GEIST_TOKEN_NONE) {
+            m->window[k++] = bos;
+        }
     }
     memcpy(m->window + k, ids, n * sizeof *ids);
     k += n;
-    if (eos != GEIST_TOKEN_NONE) {
-        m->window[k++] = eos;
+    if (geist_model_add_eos(m->model)) {
+        const geist_token_t eos = geist_model_eos_token(m->model);
+        if (eos != GEIST_TOKEN_NONE) {
+            m->window[k++] = eos;
+        }
     }
-    const size_t dim = m->store.dim;
-    if (geist_session_embed(m->sess, dim, k, m->window, m->vec) != GEIST_OK) {
+    if (geist_session_reset(m->sess) != GEIST_OK ||
+        geist_session_prefill_tokens(m->sess, k, m->window) != GEIST_OK) {
         return GM_E_ENGINE;
     }
-    pack_signs(dim, m->vec, out_bits);
+    size_t       n_dims = 0;
+    const float *emb    = geist_session_peek_embedding(&n_dims, m->sess);
+    if (emb == nullptr || n_dims != m->dim) {
+        return GM_E_ENGINE;
+    }
+    memcpy(m->vec, emb, m->dim * sizeof *m->vec);
+    pack_signs(m->dim, m->vec, m->bits);
     return GM_OK;
 }
 
+/* The one funnel every document takes, and therefore the one place its
+ * limits are enforced — before the file is read, tokenized or embedded. */
 static enum gm_status
-index_text(struct gm *m, const char *id, const char *text, int64_t mtime, uint64_t size) {
+index_text(struct gm *m, const char *id, const char *text, size_t len, int64_t mtime) {
+    if (gm_store_path_too_long(id)) {
+        return GM_E_TOO_LONG;
+    }
+    if (len > GM_MAX_DOC_BYTES) {
+        return GM_E_TOO_LONG;
+    }
     size_t n_ids = 0;
     if (geist_session_tokenize(m->sess, text, GM_MAX_DOC_TOKENS, m->ids, &n_ids) != GEIST_OK) {
         return GM_E_ENGINE;
     }
+    if (n_ids == GM_MAX_DOC_TOKENS) {
+        return GM_E_TOO_LONG; /* may have been cut off; refuse rather than guess */
+    }
     if (n_ids == 0) {
         return GM_OK; /* nothing to remember; not an error */
     }
-    size_t         doc = 0;
-    enum gm_status s   = gm_store_put_doc(&m->store, id, mtime, size, &doc);
-    if (s != GM_OK) {
+
+    size_t            doc   = 0;
+    enum gm_doc_state state = GM_DOC_NEW;
+    enum gm_status    s     = gm_store_put_doc(m->store, id, mtime, (uint64_t) len, &doc, &state);
+    if (s != GM_OK || state == GM_DOC_UNCHANGED) {
         return s;
     }
 
@@ -127,11 +162,10 @@ index_text(struct gm *m, const char *id, const char *text, int64_t mtime, uint64
     uint32_t     chunk  = 0;
     for (size_t off = 0; off < n_ids; off += stride) {
         const size_t take = (n_ids - off > GM_CHUNK_TOKENS) ? GM_CHUNK_TOKENS : (n_ids - off);
-        s                 = embed_window(m, take, m->ids + off, m->bits);
-        if (s != GM_OK) {
-            return s;
+        s                 = embed_window(m, take, m->ids + off);
+        if (s == GM_OK) {
+            s = gm_store_put_chunk(m->store, doc, chunk++, m->bits);
         }
-        s = gm_store_put_chunk(&m->store, doc, chunk++, (uint32_t) take, m->bits);
         if (s != GM_OK) {
             return s;
         }
@@ -164,25 +198,38 @@ gm_open(const char *dir, const char *model_path, const struct gm_opts *opts, str
     if (geist_model_load(model_path, m->be, &m->model) != GEIST_OK) {
         goto fail;
     }
-    const size_t dim = geist_model_embed_dim(m->model);
-    if (dim == 0 || dim % 8u != 0u) {
-        goto fail;
-    }
     const struct geist_session_opts so = {.max_seq_len = GM_CHUNK_TOKENS + 2u};
     if (geist_session_create(m->model, m->be, &so, &m->sess) != GEIST_OK) {
         goto fail;
     }
 
-    s = GM_E_OOM;
-    m->vec    = malloc(dim * sizeof *m->vec);
-    m->bits   = malloc(dim / 8u);
-    m->ids    = malloc(GM_MAX_DOC_TOKENS * sizeof *m->ids);
-    m->window = malloc((GM_CHUNK_TOKENS + 2u) * sizeof *m->window);
-    if (m->vec == nullptr || m->bits == nullptr || m->ids == nullptr || m->window == nullptr) {
+    /* The width comes from the model, and the only thing that reports it is
+     * an embedding: peek after one prefill. A model that produces none is
+     * not an embedding model, which is a refusal, not a zero. */
+    m->ids = malloc(GM_MAX_DOC_TOKENS * sizeof *m->ids);
+    if (m->ids == nullptr) {
+        s = GM_E_OOM;
+        goto fail;
+    }
+    size_t probe_n = 0;
+    if (geist_session_tokenize(m->sess, "probe", GM_MAX_DOC_TOKENS, m->ids, &probe_n) != GEIST_OK ||
+        probe_n == 0 || geist_session_prefill_tokens(m->sess, probe_n, m->ids) != GEIST_OK) {
+        goto fail;
+    }
+    if (geist_session_peek_embedding(&m->dim, m->sess) == nullptr || m->dim == 0 ||
+        m->dim % 8u != 0u) {
         goto fail;
     }
 
-    s = gm_store_open(&m->store, dir, dim, model_fingerprint(model_path, dim));
+    s        = GM_E_OOM;
+    m->vec   = malloc(m->dim * sizeof *m->vec);
+    m->bits  = malloc(m->dim / 8u);
+    m->window = malloc((GM_CHUNK_TOKENS + 2u) * sizeof *m->window);
+    if (m->vec == nullptr || m->bits == nullptr || m->window == nullptr) {
+        goto fail;
+    }
+
+    s = gm_store_open(dir, m->dim, model_fingerprint(model_path, m->dim), &m->store);
     if (s != GM_OK) {
         goto fail;
     }
@@ -198,7 +245,7 @@ void gm_close(struct gm *m) {
     if (m == nullptr) {
         return;
     }
-    gm_store_close(&m->store);
+    gm_store_close(m->store);
     if (m->sess != nullptr) {
         geist_session_destroy(m->sess);
     }
@@ -223,32 +270,16 @@ enum gm_status gm_remember_file(struct gm *m, const char *path) {
     if (stat(path, &sb) != 0) {
         return GM_E_IO;
     }
-    if ((uint64_t) sb.st_size > GM_MAX_DOC_BYTES) {
-        return GM_E_TOO_LONG;
+    uint8_t       *text = nullptr;
+    size_t         len  = 0;
+    enum gm_status s    = gm_read_file(path, &text, &len);
+    if (s != GM_OK) {
+        return s;
     }
-    /* Unchanged since the last index: nothing to do. This is what makes
-     * `gm_remember_file` over a whole tree cheap to re-run. */
-    const size_t found = gm_store_find_doc(&m->store, path);
-    if (found != SIZE_MAX && m->store.docs[found].mtime == (int64_t) sb.st_mtime &&
-        m->store.docs[found].size == (uint64_t) sb.st_size) {
-        return GM_OK;
-    }
-
-    FILE *f = fopen(path, "rb");
-    if (f == nullptr) {
-        return GM_E_IO;
-    }
-    char *text = malloc((size_t) sb.st_size + 1u);
     if (text == nullptr) {
-        fclose(f);
-        return GM_E_OOM;
+        return GM_E_IO; /* stat saw it; it vanished between the two */
     }
-    const size_t got = fread(text, 1, (size_t) sb.st_size, f);
-    fclose(f);
-    text[got] = '\0';
-
-    const enum gm_status s =
-            index_text(m, path, text, (int64_t) sb.st_mtime, (uint64_t) sb.st_size);
+    s = index_text(m, path, (const char *) text, len, (int64_t) sb.st_mtime);
     free(text);
     return s;
 }
@@ -257,12 +288,9 @@ enum gm_status gm_remember_text(struct gm *m, const char *id, const char *text) 
     if (m == nullptr || id == nullptr || text == nullptr) {
         return GM_E_INVALID_ARG;
     }
-    const size_t len = strlen(text);
-    if (len > GM_MAX_DOC_BYTES) {
-        return GM_E_TOO_LONG;
-    }
-    /* No mtime to compare against, so a repeated id always re-indexes. */
-    return index_text(m, id, text, 0, (uint64_t) len);
+    /* No mtime, so the freshness test reduces to the length: a repeated id
+     * with the same text is unchanged, exactly as for a file. */
+    return index_text(m, id, text, strlen(text), 0);
 }
 
 enum gm_status
@@ -288,59 +316,18 @@ gm_recall(struct gm *m, size_t k, const char *query, struct gm_hit out[static k]
     if (n_ids == 0) {
         return GM_OK;
     }
-    enum gm_status s = embed_window(m, n_ids, m->ids, m->bits);
-    if (s != GM_OK) {
-        return s;
-    }
-
-    /* ponytail: brute-force popcount scan, no index. 1024-bit vectors are
-     * 128 B, so 100k chunks is 12.8 MB streamed once — single-digit
-     * milliseconds on a Pi 5, and it is exact. Reach for an ANN index when
-     * a scan measurably exceeds 100 ms, not before. */
-    const size_t   bytes = m->store.bytes;
-    const uint64_t *q    = (const uint64_t *) (const void *) m->bits;
-    const size_t   words = bytes / 8u;
-
-    size_t n = 0;
-    for (size_t i = 0; i < m->store.n_chunks; i++) {
-        const struct gm_chunk_rec *rec = &m->store.chunks[i];
-        if (rec->generation != m->store.docs[rec->doc].generation) {
-            continue; /* superseded by a re-index */
-        }
-        const uint64_t *v = (const uint64_t *) (const void *) (m->store.vecs + i * bytes);
-        uint32_t        d = 0;
-        for (size_t w = 0; w < words; w++) {
-            d += (uint32_t) __builtin_popcountll(q[w] ^ v[w]);
-        }
-        /* Insertion into the top-k. k is a handful, so this beats sorting
-         * the whole store and allocates nothing. */
-        if (n < k || d < out[n - 1].distance) {
-            size_t pos = (n < k) ? n : k - 1;
-            while (pos > 0 && out[pos - 1].distance > d) {
-                out[pos] = out[pos - 1];
-                pos--;
-            }
-            out[pos] = (struct gm_hit) {.doc = rec->doc, .chunk = rec->chunk, .distance = d};
-            if (n < k) {
-                n++;
-            }
-        }
-    }
-    *n_out = n;
-    return GM_OK;
+    const enum gm_status s = embed_window(m, n_ids, m->ids);
+    return s == GM_OK ? gm_store_scan(m->store, k, m->bits, out, n_out) : s;
 }
 
 const char *gm_doc_path(const struct gm *m, uint32_t doc) {
-    if (m == nullptr || doc >= m->store.n_docs) {
-        return nullptr;
-    }
-    return m->store.docs[doc].path;
+    return m != nullptr ? gm_store_doc_path(m->store, doc) : nullptr;
 }
 
 size_t gm_chunk_count(const struct gm *m) {
-    return m != nullptr ? m->store.n_chunks : 0u;
+    return m != nullptr ? gm_store_live_chunks(m->store) : 0u;
 }
 
 size_t gm_dim(const struct gm *m) {
-    return m != nullptr ? m->store.dim : 0u;
+    return m != nullptr ? m->dim : 0u;
 }

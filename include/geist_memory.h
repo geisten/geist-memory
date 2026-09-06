@@ -74,7 +74,8 @@ void gm_close(struct gm *m);
 [[nodiscard]] enum gm_status gm_remember_file(struct gm *m, const char *path);
 
 /* Index a string under a caller-chosen id (any short label — a URL, a
- * message id, "shell-history"). Same re-index rule, keyed on the id. */
+ * message id, "shell-history"). Same re-index rule, keyed on the id: the
+ * same id with the same text is a no-op. */
 [[nodiscard]] enum gm_status gm_remember_text(struct gm *m, const char *id, const char *text);
 
 struct gm_hit {
@@ -95,7 +96,9 @@ struct gm_hit {
  * gm_close. nullptr for an out-of-range index. */
 const char *gm_doc_path(const struct gm *m, uint32_t doc);
 
-/* Chunks in the store, live and dead — the number gm_recall scans. */
+/* Chunks a recall would consider: those whose document has not been
+ * re-indexed under them. Superseded chunks are excluded — they stay on disk
+ * until a compaction that does not exist yet, but they never match. */
 size_t gm_chunk_count(const struct gm *m);
 
 /* Embedding width in bits, i.e. the model's d_model. */

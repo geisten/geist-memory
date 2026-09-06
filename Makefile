@@ -46,8 +46,10 @@ $(BUILD)/%.o: %.c
 $(GEIST_LIB):
 	$(MAKE) -C $(GEISTLIB) MODE=$(MODE)
 
+# 77 is the skip code the test uses, matching geistlib's runner; without a
+# model it is not a failure.
 test: $(BUILD)/test_gm_e2e
-	@./$<
+	@./$< || [ $$? -eq 77 ]
 
 $(BUILD)/test_gm_e2e: test/test_gm_e2e.c $(LIB) $(GEIST_LIB)
 	@mkdir -p $(dir $@)
