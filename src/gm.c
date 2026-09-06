@@ -71,14 +71,7 @@ static uint64_t model_fingerprint(const char *model_path, size_t dim) {
             (uint64_t) sb.st_mtime,
             (uint64_t) dim,
     };
-    uint64_t h = 1469598103934665603ULL;
-    for (size_t i = 0; i < 3; i++) {
-        for (int b = 0; b < 8; b++) {
-            h ^= (parts[i] >> (b * 8)) & 0xffu;
-            h *= 1099511628211ULL;
-        }
-    }
-    return h;
+    return gm_fnv1a(parts, sizeof parts);
 }
 
 /* sign(v) -> one bit per dimension. The whole index in 1/32nd of the float

@@ -1,0 +1,74 @@
+/*
+ * Vendored from geistlib: src/base/heap.h @ ea1acd3
+ *
+ * geistlib ships only include/geist*.h; heap.h and checked.h live under
+ * src/base and are not installable, so a consumer that wants the same
+ * allocation and overflow discipline has to carry a copy. This is that
+ * copy -- unmodified below this banner, so a diff against upstream is a
+ * plain file comparison. Re-vendor with tools/vendor-geistlib-base.sh.
+ *
+ * HEADER ONLY. heap_alloc_aligned and friends are defined in geistlib's
+ * heap.c and exported from libgeist.a, which this library already links, so
+ * nothing here needs a second implementation -- but it does mean geistlib's
+ * archive is a link-time dependency of anything that calls them, not just a
+ * compile-time one.
+ */
+//
+// Created by germar on 09.03.25.
+//
+#pragma once
+#include <stdbool.h>
+#include <stdlib.h>
+#include <stdint.h>
+#include <stdalign.h>
+
+/* Cache line size alignment for optimal CPU performance */
+#define CACHE_LINE_SIZE 64 /* 64 bytes = 512 bits (typical cache line size) */
+
+/* Define SIMD alignment based on available hardware capabilities */
+#if defined(__AVX512F__)
+#define SIMD_ALIGNMENT 64 /* 512 bits */
+#elif defined(__AVX__) || defined(__AVX2__)
+#define SIMD_ALIGNMENT 32 /* 256 bits */
+#elif defined(__SSE__) || defined(__SSE2__) || defined(__NEON__)
+#define SIMD_ALIGNMENT 16 /* 128 bits */
+#else
+#define SIMD_ALIGNMENT 8 /* Fallback */
+#endif
+
+/* Use the larger of cache line and SIMD alignment for optimal performance */
+#define OPTIMAL_ALIGNMENT (CACHE_LINE_SIZE > SIMD_ALIGNMENT ? CACHE_LINE_SIZE : SIMD_ALIGNMENT)
+
+static_assert((CACHE_LINE_SIZE & (CACHE_LINE_SIZE - 1)) == 0,
+              "CACHE_LINE_SIZE must be a power of 2");
+static_assert((SIMD_ALIGNMENT & (SIMD_ALIGNMENT - 1)) == 0, "SIMD_ALIGNMENT must be a power of 2");
+static_assert(OPTIMAL_ALIGNMENT >= 8, "OPTIMAL_ALIGNMENT must be at least 8 bytes");
+
+void *heap_alloc_aligned(size_t size, size_t alignment);
+void *heap_calloc_aligned(size_t count, size_t size, size_t alignment);
+
+/* count * size, computed by the allocator so it can refuse the overflow
+ * instead of receiving a wrapped total. The uninitialized counterpart of
+ * heap_calloc_aligned, which has always split its arguments this way.
+ * Returns nullptr on overflow or on a zero count/size. */
+void *heap_alloc_n_aligned(size_t count, size_t size, size_t alignment);
+
+/* Successful heap_alloc_aligned calls since process start. Hot paths are
+ * specified allocation-free (include/geist_weight.h, src/engine/sampler.h);
+ * a bench or test asserts a zero delta across its measured loop instead of
+ * trusting the comment. Monotonic, relaxed — a counter, not a barrier. */
+[[nodiscard]] uint64_t heap_alloc_count(void);
+
+/* The array macros multiplied `count * sizeof(type)` at the call site and
+ * handed the allocator whatever came out. Model- and caller-controlled
+ * counts reach these (GGUF tensor dimensions, image geometry, KV
+ * capacities), and a wrapped product is a small allocation followed by a
+ * large write. The count and the element size stay separate now, all the
+ * way to the check. */
+#define heap_alloc_array_aligned(_type, _num) \
+    ((_type *) heap_alloc_n_aligned((_num), sizeof(_type), alignof(_type)))
+
+#define heap_calloc_array_aligned(_type, _num) \
+    ((_type *) heap_calloc_aligned((_num), sizeof(_type), alignof(_type)))
+
+void safe_free(void **ptr);

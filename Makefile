@@ -7,9 +7,15 @@
 #   make                 # build lib/libgeist_memory.a
 #   make test            # build + run the E2E test (needs GEIST_EMBED_GGUF_PATH)
 #
-# GEISTLIB points at a geistlib checkout. It becomes a pinned submodule once
-# geist_session_embed lands in a geistlib release — pinning an API that is
-# still EXPERIMENTAL and uncommitted would pin a moving target.
+# GEISTLIB points at a geistlib checkout, and that checkout has to carry two
+# unmerged PRs:
+#
+#   #396  mean pooling + loading upstream's published GGUFs, and
+#         geist_model_add_bos / _add_eos, which embed_window needs
+#   #397  the test runner reporting what a passing test measured
+#
+# It becomes a pinned submodule once both are released — pinning an API that
+# is still EXPERIMENTAL and unmerged would pin a moving target.
 
 GEISTLIB ?= ../geistlib
 TARGET   ?= $(shell $(GEISTLIB)/mk/detect-target.sh)
@@ -46,10 +52,13 @@ $(BUILD)/%.o: %.c
 $(GEIST_LIB):
 	$(MAKE) -C $(GEISTLIB) MODE=$(MODE)
 
-# 77 is the skip code the test uses, matching geistlib's runner; without a
-# model it is not a failure.
+# geistlib's runner owns the exit-code convention this test writes to
+# (0 pass / 77 skip / 99 harness error), so it reports the run rather than a
+# hand-rolled `|| [ $$? -eq 77 ]` that only understood one of the four. It
+# also prints a passing test's summary line, which is where the retrieval
+# counts live.  GEIST_TEST_VERBOSE=1 for the full transcript.
 test: $(BUILD)/test_gm_e2e
-	@./$< || [ $$? -eq 77 ]
+	@sh $(GEISTLIB)/mk/run-tests.sh $(BUILD)
 
 $(BUILD)/test_gm_e2e: test/test_gm_e2e.c $(LIB) $(GEIST_LIB)
 	@mkdir -p $(dir $@)
