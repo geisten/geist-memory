@@ -92,9 +92,12 @@ git clone https://github.com/geisten/geistlib ../geistlib   # or set GEISTLIB=
 make                                                        # lib/<target>/release/libgeist_memory.a
 ```
 
-`geist_session_embed` is still `EXPERIMENTAL` and unreleased in geistlib, so
-the engine is a path (`GEISTLIB=../geistlib`) rather than a pinned submodule.
-It becomes a submodule when the API lands in a release.
+Needs geistlib at or past `d95f351` (2026-09-06), where mean pooling, loading
+upstream's published GGUFs and the accessors this library uses all landed.
+The engine stays a path (`GEISTLIB=../geistlib`) rather than a pinned
+submodule while `geist_session_peek_embedding` and the `add_bos` / `add_eos`
+accessors are `EXPERIMENTAL` — the pin would have to move with every change
+to them. It becomes a submodule once they are in a geistlib release.
 
 ```sh
 GEIST_EMBED_GGUF_PATH=path/to/model.gguf make test
@@ -103,15 +106,22 @@ GEIST_EMBED_GGUF_PATH=path/to/model.gguf make test
 The test is the only `main()` in the repository. It indexes three documents,
 asks three questions that share no vocabulary with their answers, closes and
 reopens the store, re-indexes a changed file, and checks that a store built
-by another model is refused:
+by another model is refused. It runs through geistlib's test runner, which
+reports the verdict and the test's own summary line:
 
 ```
-model dim=1024 bits (128 bytes/vector)
+  PASS  test_gm_e2e (geist-memory: index, recall, persist, re-index, chunk — all pass)
+```
+
+Without `GEIST_EMBED_GGUF_PATH` it reports `SKIP` rather than failing the
+build. `GEIST_TEST_VERBOSE=1` prints the whole transcript — the per-question
+retrieval lines and the Hamming distances:
+
+```
   "why does my loaf not rise?"                    -> doc_yeast.md    (d=296)
   "what makes the sea level change twice a day?"  -> doc_tides.md    (d=260)
   "how much of my instalment pays down the debt?" -> doc_mortgage.md (d=272)
-long text -> 21 chunks
-store built by another model -> refused
+  long text -> 21 chunks
 ```
 
 Clean under ASan and UBSan.
@@ -120,9 +130,13 @@ Clean under ASan and UBSan.
 
 ```
 vectors.gm   32-byte header + one packed sign-bit vector per chunk
-chunks.gm    32-byte header + {doc, chunk, generation, n_tokens}
-docs.gm      32-byte header + {path, mtime, size, generation, n_chunks}
+chunks.gm    32-byte header + {doc, chunk, generation, reserved}
+docs.gm      32-byte header + {path, mtime, size, generation, reserved}
 ```
+
+A document's path is found through an in-memory hash index, rebuilt from
+`docs.gm` at open and never written down: a derived index on disk is a
+second thing that can be wrong.
 
 Re-indexing bumps a document's `generation`; recall skips chunks whose
 generation no longer matches. A changed file therefore stops matching
