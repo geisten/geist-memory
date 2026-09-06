@@ -5,7 +5,7 @@ in the sandbox. Engine revision: `32b432660948a50be05b355efa74a789456a37dd`;
 Reference backend `cpu_scalar`, native GEMM, no OpenMP. The subsequent Pi model
 run explicitly selects `cpu_neon`. The engine now includes the checksum-bound
 compatibility patch documented in patches/README.md. The final patch SHA-256 is
-`d819ca5f23f38a2273af5e9aa43a910633ea6c2220bb74fdaf2535d0d30869df`.
+`1ee2d5707cf841420f4635b8b8c2dd78fdba52c76cbd1915403935313b318b74`.
 Results refer to the current
 unreleased implementation, not to a released platform support promise.
 
@@ -210,3 +210,8 @@ dedicated 32-MiB tmpfs. The macOS runner image was explicitly
 `macos-15-arm64`; Intel macOS is a separate matrix entry using
 [GitHub's documented Intel label](https://docs.github.com/en/actions/reference/runners/github-hosted-runners).
 The real-model acceptance remains the separate macOS/Pi5 evidence above.
+
+The added Intel macOS job in run 34061970213 exposed an unused ARM-only
+`sysctl_bool` helper in the pinned engine. Its compile guard now matches its
+Apple Silicon call sites, preserving strict warnings and x86 feature detection.
+The other seven jobs passed that run.

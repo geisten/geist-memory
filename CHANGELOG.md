@@ -44,5 +44,8 @@
 - Download and SHA-pin the official BitNet embedding 0.6B. Add optional exact
   preparation for the pinned engine and publish genuine DE/EN and Pi5 measurements.
 
-Native x86-64/GitHub and representative quality acceptance remain outstanding;
-see docs/VALIDATION.md.
+- Publish successful GitHub acceptance for Linux x86-64/ARM64 with GCC/Clang,
+  fully static musl consumers and macOS ARM64; add a native Intel macOS job.
+
+Representative quality and numerical-reference acceptance remain outstanding;
+see docs/VALIDATION.md for exact coverage and the remaining release gates.

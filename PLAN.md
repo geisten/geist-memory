@@ -237,8 +237,8 @@ prüfbaren Zwischenstand; die jeweils nächste baut auf dessen Garantien auf.
   weitergehende Format- und Plattformziele stehen separat als offene Punkte.
 - [x] Pflichtprüfungen können nicht durch fehlende Modelle oder pauschale Skips grün werden.
 - [x] Die CI-Definition ruft dieselben Make-Targets wie die lokale Entwicklung auf.
-  Erfolgreiche GitHub-CI-Läufe sind noch nicht nachgewiesen. Der vorbereitete
-  Abnahmebranch wartet nach automatischer Freigabeprüfung auf Veröffentlichungszustimmung.
+  Der erste veröffentlichte Lauf besteht alle sieben Jobs; Quellen und
+  Einzelprüfungen sind in docs/VALIDATION.md mit dem getesteten Commit verknüpft.
 - [x] Fuzz- und Fehlerfalltests laufen mit festgelegten Zeit-/Speicherbudgets.
 
 ## 4 — Plattform-Builds, statisches Linken und Integration

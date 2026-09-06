@@ -16,10 +16,13 @@ The acceptance runs reproduced these issues:
   only 16. Keep bounded ownership tracking, with capacity 24. The existing
   overflow check and cleanup remain intact. The real-model load and E2E test
   exercise all 28 layers.
-
 - Session cleanup omitted the embedding projection-input scratch alias. Pi5
   LeakSanitizer found eight leaked buffer headers (512 bytes) in real-model E2E.
   Include this alias in the existing destruction list, before freeing its pool.
+
+- Intel macOS compiled an unused ARM-only sysctl helper and failed strict
+  Clang warnings. Match the helper guard to its Apple Silicon call sites;
+  retain all warnings and the existing x86 CPU detection.
 
 No CPU minimum is silently raised. Model preparation separately addresses the
 pinned engine's F32 normalization and metadata contract; see
