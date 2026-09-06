@@ -7,15 +7,15 @@
 #   make                 # build lib/libgeist_memory.a
 #   make test            # build + run the E2E test (needs GEIST_EMBED_GGUF_PATH)
 #
-# GEISTLIB points at a geistlib checkout, and that checkout has to carry two
-# unmerged PRs:
+# GEISTLIB points at a geistlib checkout. It needs geistlib at or past
+# d95f351 (2026-09-06), which is where mean pooling, loading upstream's
+# published GGUFs, geist_model_add_bos / _add_eos and the fixed test runner
+# all landed.
 #
-#   #396  mean pooling + loading upstream's published GGUFs, and
-#         geist_model_add_bos / _add_eos, which embed_window needs
-#   #397  the test runner reporting what a passing test measured
-#
-# It becomes a pinned submodule once both are released — pinning an API that
-# is still EXPERIMENTAL and unmerged would pin a moving target.
+# Still a path rather than a pinned submodule: geist_session_peek_embedding
+# and the two add_bos / add_eos accessors are @stability EXPERIMENTAL, so the
+# pin would have to move with every change to them. Pin once they are in a
+# geistlib release.
 
 GEISTLIB ?= ../geistlib
 TARGET   ?= $(shell $(GEISTLIB)/mk/detect-target.sh)
