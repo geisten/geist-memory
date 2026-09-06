@@ -7,18 +7,19 @@ trennt implementierte Arbeit von noch ausstehender Abnahme. Die Abschnitte darun
 enthalten jetzt einzelne Checkboxen: `[x]` bedeutet implementiert und im angegebenen
 Umfang geprüft; `[ ]` bedeutet offen. Die dokumentierte Abnahme umfasst jetzt macOS ARM64, echte Pi5-Hardware und
 Ubuntu-/Alpine-ARM64-Container sowie das echte BitNet-Embedding-0.6B-Modell.
-GitHub Actions hat Linux x86-64/ARM64 (glibc und musl-static) sowie macOS ARM64
-abgenommen. Der zusätzliche Intel-macOS-Lauf steht noch aus.
+GitHub Actions hat alle acht Jobs für Linux x86-64/ARM64 (glibc und musl-static)
+sowie macOS ARM64/x86-64 erfolgreich ausgeführt. Die dokumentierten Basisprofile
+sind damit nativ geprüft; die übrigen Release-Gates bleiben ausdrücklich offen.
 
 ## Umsetzungsstand
 
 | Etappe | Implementiert | Noch offen |
 | --- | --- | --- |
-| 0 | Make-Modi, gepinnte isolierte Engine, modellfreie Tests, Konfiguration | Abnahme frischer Umgebungen auf weiteren Plattformen |
+| 0 | Make-Modi, gepinnte isolierte Engine, modellfreie Tests, Konfiguration | Keine offenen Punkte für die dokumentierten Basisprofile |
 | 1 | Geprüfte Größen, Bounds, Hamming-Tails/Alignment, API-Lebensdauer, atomare Embedding-Vorbereitung | Keine bekannten reproduzierten Speicherfehler offen |
-| 2 | Writer-Lock, Undo-Journal, wiederholbare Recovery, Inhaltsidentität, explizites LE-v2-Format mit SHA-256 und v1-Import | Native Format-Abnahme auf weiteren Plattformen |
-| 3 | Referenztests, OOM/I/O/Crash-Tests einschließlich Recovery, Fuzzing, Analyse, CI-Definition | GitHub-CI unter Linux x86-64/ARM64 und macOS ARM64 bestanden; Intel-macOS offen |
-| 4 | Plattformprofile, statische Archive, Linux-static-Profil, externer Consumer, Installation, lokales Paket | Pi5, Linux/musl x86-64/ARM64 und macOS ARM64 geprüft; Intel-macOS offen |
+| 2 | Writer-Lock, Undo-Journal, wiederholbare Recovery, Inhaltsidentität, explizites LE-v2-Format mit SHA-256 und v1-Import | Abschließende Bewertung der dokumentierten Format-/Integritätsgrenzen |
+| 3 | Referenztests, OOM/I/O/Crash-Tests einschließlich Recovery, Fuzzing, Analyse, CI-Definition | Fehlereinbringung in übrige Kernel- und Engine-Pfade |
+| 4 | Plattformprofile, statische Archive, Linux-static-Profil, externer Consumer, Installation, lokales Paket | Keine offenen Punkte für die dokumentierten Basisprofile |
 | 5 | Store-Budget, Statistiken, Kompaktierung, Scan-Benchmark, Modell-Messlauf und DE/EN-Testkorpus | Modell-/Pi-Messungen vorhanden; repräsentativer Qualitätsnachweis offen |
 | 6 | API-/Format-/Build-Dokumentation, CLI, Beitragsregeln, Änderungsnotizen | Vollständiges Release-Gate bleibt offen |
 
@@ -60,10 +61,11 @@ Analyse, Benchmarks, Installation und Auslieferung. CI ruft dieselben Targets au
 | Linux ARM64 | Generisches ARM64-Profil, unabhängig vom Pi | Native Tests, Sanitizer soweit unterstützt, Consumer-Linktest |
 | Raspberry Pi 5 | Explizites optimiertes ARM64-Profil | Tests und Speicher-/Latenzmessungen auf echter Hardware |
 | macOS ARM64 | Apple Silicon mit unterstütztem Apple Clang | Native Tests, Sanitizer, Prüfung dynamischer Abhängigkeiten |
+| macOS x86-64 | Intel mit C23-Clang | Native Tests, Sanitizer, Consumer-Linktest, reproduzierbare Pakete |
 | Linux musl static | x86-64 und ARM64, soweit Engine und Toolchain unterstützt | Statisches Testprogramm ohne ELF-Interpreter oder dynamische Bibliotheksabhängigkeiten; Lauf in minimaler Umgebung |
 
-Windows und macOS x86-64 sind nachgelagerte Erweiterungsziele. Sie gelten erst
-nach Engine-, Toolchain-, Dateisystem- und Laufzeittests als unterstützt.
+Windows bleibt ein nachgelagertes Erweiterungsziel und benötigt eigene Engine-,
+Toolchain-, Dateisystem- und Laufzeittests.
 Plattformportabilität bedeutet zunächst den obigen Umfang, keine Zusage für
 beliebige ISO-C- oder Embedded-Umgebungen.
 
@@ -202,7 +204,8 @@ prüfbaren Zwischenstand; die jeweils nächste baut auf dessen Garantien auf.
   vertauschte Datensätze und 64-KiB-Batchgrenzen lokal unter GCC/Clang/Sanitizern prüfen.
 - [x] Import mit OOM, partiellen I/O-Fehlern und Prozessabbrüchen prüfen; Quelldateien
   bleiben bytegleich, Recovery liefert ein leeres oder vollständig importiertes Ziel.
-- [ ] Dieselben Format-Fixtures auf allen zugesagten nativen Plattformen abnehmen.
+- [x] Dieselben Format-Fixtures auf allen dokumentierten nativen Basisplattformen
+  abnehmen: Linux/macOS x86-64 und ARM64, Pi5 sowie Linux musl-static.
 - [x] Ein zweiter Writer wird zuverlässig abgewiesen.
 
 ## 3 — Systematische Qualitätsabsicherung
@@ -237,7 +240,7 @@ prüfbaren Zwischenstand; die jeweils nächste baut auf dessen Garantien auf.
   weitergehende Format- und Plattformziele stehen separat als offene Punkte.
 - [x] Pflichtprüfungen können nicht durch fehlende Modelle oder pauschale Skips grün werden.
 - [x] Die CI-Definition ruft dieselben Make-Targets wie die lokale Entwicklung auf.
-  Der erste veröffentlichte Lauf besteht alle sieben Jobs; Quellen und
+  Die erweiterte Matrix besteht alle acht Jobs; Quellen und
   Einzelprüfungen sind in docs/VALIDATION.md mit dem getesteten Commit verknüpft.
 - [x] Fuzz- und Fehlerfalltests laufen mit festgelegten Zeit-/Speicherbudgets.
 
@@ -294,7 +297,8 @@ prüfbaren Zwischenstand; die jeweils nächste baut auf dessen Garantien auf.
 
 ### Fertig, wenn
 
-- [ ] Jedes zugesagte Profil besteht seine native Abnahme; Cross-Compile allein zählt nicht.
+- [x] Jedes dokumentierte Basisprofil besteht seine native Abnahme;
+  Cross-Compile allein zählt nicht. Reale Modelltests bleiben separat ausgewiesen.
 - [x] Die Linux-musl-Consumer auf ARM64 und x86-64 laufen vollständig statisch;
   kein ELF-Interpreter und keine dynamischen Abhängigkeiten.
 - [x] Pi5 mit GCC/Clang und generisches Linux ARM64 prüfen; Ubuntu ARM64 mit
@@ -345,7 +349,8 @@ prüfbaren Zwischenstand; die jeweils nächste baut auf dessen Garantien auf.
 
 ### Fertig, wenn
 
-- [ ] Pi- und Plattformversprechen sind durch veröffentlichte Messungen gedeckt.
+- [x] Pi-Messungen und native Abnahmen der dokumentierten Basisplattformen
+  sind veröffentlicht. Die begrenzte Modell-/Backend-Abdeckung bleibt ausgewiesen.
 - [x] Speichergrenzen und das Verhalten bei Erreichen der Grenzen sind getestet.
 - [x] Wiederholtes Re-Indexieren lässt sich durch Kompaktierung kontrolliert bereinigen.
 - [x] Qualitätsverluste der binären Quantisierung im kleinen gemessenen Korpus
@@ -373,7 +378,8 @@ Ein Release als Vorzeigeprojekt erfolgt erst, wenn:
 
 - [x] Nachgewiesene ursprüngliche Speicherfehler lokal korrigiert und regressionsgetestet.
 - [x] Transaktions-/Recovery-Fehlerfalltests bestehen lokal.
-- [ ] Zugesagte Plattformmatrix einschließlich Consumer- und Linkprüfungen ist grün.
+- [x] Dokumentierte Basisplattformmatrix einschließlich Consumer- und Linkprüfungen
+  ist nativ grün; optionale Backends erfordern eine separate Modellabnahme.
 - [x] Erste echte Modelltests und veröffentlichte Pi5-/Qualitätsmessungen liegen vor.
 - [ ] Repräsentative Qualitätsabnahme und numerische Engine-Referenzprüfung abschließen.
 - [x] Installation, Paketprüfung und kompilierte Beispiele funktionieren lokal.

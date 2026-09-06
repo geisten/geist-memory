@@ -6,8 +6,7 @@ Reference backend `cpu_scalar`, native GEMM, no OpenMP. The subsequent Pi model
 run explicitly selects `cpu_neon`. The engine now includes the checksum-bound
 compatibility patch documented in patches/README.md. The final patch SHA-256 is
 `1ee2d5707cf841420f4635b8b8c2dd78fdba52c76cbd1915403935313b318b74`.
-Results refer to the current
-unreleased implementation, not to a released platform support promise.
+Results refer to the current unreleased implementation, not to a released platform support promise.
 
 ## Completed locally
 
@@ -127,17 +126,18 @@ still scanned for liveness until compaction.
 
 ## Pending release gates
 
-- Native Intel macOS acceptance remains pending. Linux x86-64/ARM64,
-  musl-static x86-64/ARM64 and macOS ARM64 passed the GitHub matrix below.
 - The official 0.6B GGUF was downloaded and SHA-verified. Its prepared variant
   passes macOS and Pi5 E2E and produced real DE/EN measurements on macOS and Pi5. The
   preparation is exact for normalization values, but numerical equivalence of
   geistlib inference against Microsoft's reference implementation remains unproven.
 - The small DE/EN corpus is now measured. A larger representative corpus and
   agreed quality thresholds remain pending; see [MODEL_BENCHMARK.md](MODEL_BENCHMARK.md).
-- v2 checksums and source-preserving v1 import are locally tested. Fixtures passed on macOS ARM64 and Linux x86-64/ARM64 with glibc and musl. Checksums are unkeyed, and the model identity still
-  retains only 64 bits; neither authenticates data or prevents whole-store rollback.
-- macOS x86-64 is a build profile only; Windows remains outside the POSIX scope.
+- v2 checksums and source-preserving v1 import passed on macOS x86-64/ARM64
+  and Linux x86-64/ARM64 with glibc and musl. Checksums are unkeyed, and the model
+  identity retains only 64 bits; neither authenticates data or prevents rollback.
+  Final integrity acceptance must retain these limits explicitly.
+- Systematic fault injection into the remaining kernel operations and real-engine
+  allocations is still pending. Windows remains outside the POSIX scope.
 
 The minimum documented GCC option is `-std=c23`, introduced with GCC 14
 ([GCC 14 changes](https://gcc.gnu.org/gcc-14/changes.html)). Minimum versions are
@@ -215,3 +215,15 @@ The added Intel macOS job in run 34061970213 exposed an unused ARM-only
 `sysctl_bool` helper in the pinned engine. Its compile guard now matches its
 Apple Silicon call sites, preserving strict warnings and x86 feature detection.
 The other seven jobs passed that run.
+
+[Run 34062145647](https://github.com/geisten/geist-memory/actions/runs/34062145647)
+then passed **all eight jobs** for commit
+`2fcc0e37fa3da7edf8b47d404ec9632c53c2b7ce`, including the fixed native Intel
+macOS job and reruns of all seven existing jobs. The Intel job built the
+`darwin-x86_64` target and passed the same checks as the ARM64 macOS row above,
+including ASan/UBSan, all format/import fixtures and two byte-identical fresh
+packages. Both macOS architectures now have native baseline evidence.
+
+The GitHub jobs compile the real engine and model executables but do not run
+model inference. Inference evidence remains limited to the measured macOS ARM64
+and Pi5 backends; an untested optional backend is not covered by these results.

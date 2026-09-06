@@ -45,7 +45,8 @@
   preparation for the pinned engine and publish genuine DE/EN and Pi5 measurements.
 
 - Publish successful GitHub acceptance for Linux x86-64/ARM64 with GCC/Clang,
-  fully static musl consumers and macOS ARM64; add a native Intel macOS job.
+  fully static musl consumers and macOS ARM64/x86-64. Fix the engine
+  architecture guard exposed by native Intel macOS; all eight CI jobs pass.
 
 Representative quality and numerical-reference acceptance remain outstanding;
 see docs/VALIDATION.md for exact coverage and the remaining release gates.

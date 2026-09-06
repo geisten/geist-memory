@@ -162,11 +162,14 @@ ranking calculations and reports with an explicitly labelled mock engine.
 
 Tests cover independent reference search, malformed files, allocation failures,
 short I/O, sync failures, interrupted replacement/creation/compaction and interrupted
-recovery. CI calls the same Make targets on Linux x86-64/ARM64, macOS ARM64 and
-Linux musl static. A workflow definition is not evidence of a successful run.
+recovery. All eight GitHub CI jobs passed using the same Make targets on
+Linux and macOS x86-64/ARM64, including fully static Linux musl consumers.
+The [validation report](docs/VALIDATION.md) links the exact tested commits and runs.
+Real-model tests remain separate from this model-free CI matrix.
 
-Acceptance results are tracked in docs/VALIDATION.md. A broader retrieval
-corpus and the complete native platform matrix remain release gates. This is not yet a finished showcase release.
+A broader retrieval corpus, numerical engine-reference checks and the remaining
+fault-injection/integrity acceptance remain release gates. This is not yet a
+finished showcase release.
 See [PLAN.md](PLAN.md) and [validation evidence](docs/VALIDATION.md).
 
 ## Contributing and license
