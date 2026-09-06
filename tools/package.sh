@@ -11,7 +11,7 @@ if stamp=$(date -u -r "$epoch" +%Y%m%d%H%M.%S 2>/dev/null); then :
 else stamp=$(date -u -d "@$epoch" +%Y%m%d%H%M.%S); fi
 if command -v sha256sum >/dev/null 2>&1; then digest=sha256sum
 else digest='shasum -a 256'; fi
-$digest Makefile mk/config.mk patches/*.patch .clang-format include/*.h src/*.[ch] \
+$digest Makefile mk/config.mk patches/*.patch patches/*.md .clang-format include/*.h src/*.[ch] \
     test/*.[ch] test/fixtures/*.h test/*.sh examples/*.c tools/*.sh tools/*.py > "$root/SOURCE-SHA256SUMS"
 scratch=$(mktemp -d "${archive}.tmp.XXXXXX")
 trap 'rm -rf "$scratch"' EXIT HUP INT TERM

@@ -20,7 +20,7 @@ case $(uname -s) in
             deps=$(readelf -d "$binary" | sed -n 's/.*(NEEDED).*\[\(.*\)\].*/\1/p')
             for dep in $deps; do
                 case "$dep" in
-                    libc.so*|libm.so*|libpthread.so*|libdl.so*|librt.so*|libc.musl-*.so*) ;;
+                    libc.so*|libm.so*|libpthread.so*|libdl.so*|librt.so*|libc.musl-*.so*|ld-linux-aarch64.so.1|ld-linux-x86-64.so.2) ;;
                     *) echo "Unexpected runtime dependency: $dep" >&2; exit 1 ;;
                 esac
             done

@@ -5,8 +5,9 @@ Commit `1af7d07`; die Fortsetzung berücksichtigt die beabsichtigte Rücksetzung
 Die ursprüngliche Drei-Dateien-Struktur bleibt erhalten. Die folgende Übersicht
 trennt implementierte Arbeit von noch ausstehender Abnahme. Die Abschnitte darunter
 enthalten jetzt einzelne Checkboxen: `[x]` bedeutet implementiert und im angegebenen
-Umfang geprüft; `[ ]` bedeutet offen. Lokale Abnahme gilt für macOS ARM64 und
-ersetzt keine native Linux-/Pi- oder echte Modellabnahme.
+Umfang geprüft; `[ ]` bedeutet offen. Die dokumentierte Abnahme umfasst jetzt macOS ARM64, echte Pi5-Hardware und
+Ubuntu-/Alpine-ARM64-Container sowie das echte BitNet-Embedding-0.6B-Modell.
+Native x86-64- und GitHub-Abnahme stehen weiterhin aus.
 
 ## Umsetzungsstand
 
@@ -15,9 +16,9 @@ ersetzt keine native Linux-/Pi- oder echte Modellabnahme.
 | 0 | Make-Modi, gepinnte isolierte Engine, modellfreie Tests, Konfiguration | Abnahme frischer Umgebungen auf weiteren Plattformen |
 | 1 | Geprüfte Größen, Bounds, Hamming-Tails/Alignment, API-Lebensdauer, atomare Embedding-Vorbereitung | Keine bekannten reproduzierten Speicherfehler offen |
 | 2 | Writer-Lock, Undo-Journal, wiederholbare Recovery, Inhaltsidentität, explizites LE-v2-Format mit SHA-256 und v1-Import | Native Format-Abnahme auf weiteren Plattformen |
-| 3 | Referenztests, OOM/I/O/Crash-Tests einschließlich Recovery, Fuzzing, Analyse, CI-Definition | CI-Läufe und echter Modelltest fehlen als Nachweis |
-| 4 | Plattformprofile, statische Archive, Linux-static-Profil, externer Consumer, Installation, lokales Paket | Native Linux/musl/Pi-Abnahme offen; Paket-Reproduzierbarkeit lokal belegt |
-| 5 | Store-Budget, Statistiken, Kompaktierung, Scan-Benchmark, Modell-Messlauf und DE/EN-Testkorpus | Echte Modell-/Pi-Messungen und repräsentativer Qualitätsnachweis |
+| 3 | Referenztests, OOM/I/O/Crash-Tests einschließlich Recovery, Fuzzing, Analyse, CI-Definition | GitHub-CI-Läufe offen; echte Modellprüfung lokal bestanden |
+| 4 | Plattformprofile, statische Archive, Linux-static-Profil, externer Consumer, Installation, lokales Paket | Pi5 und Linux/musl ARM64 geprüft; native x86-64-Abnahme offen |
+| 5 | Store-Budget, Statistiken, Kompaktierung, Scan-Benchmark, Modell-Messlauf und DE/EN-Testkorpus | Modell-/Pi-Messungen vorhanden; repräsentativer Qualitätsnachweis offen |
 | 6 | API-/Format-/Build-Dokumentation, CLI, Beitragsregeln, Änderungsnotizen | Vollständiges Release-Gate bleibt offen |
 
 Die lokalen Prüfergebnisse und ihre Grenzen stehen in
@@ -215,8 +216,10 @@ prüfbaren Zwischenstand; die jeweils nächste baut auf dessen Garantien auf.
 - [x] OOM bei Öffnen, Laden, API-Indexierung, gemeinsamem Array-Wachstum und
   Kompaktierung sowie Short I/O, Sync-Fehler und Prozessabbrüche testen.
   Grenzen der Simulation gegenüber echten Stromausfällen dokumentieren.
-- [ ] Reale ENOSPC-Dateisystemtests und Fehler an den übrigen Kerneloperationen
-  einschließlich Engine-Allokationen bei echtem Modell ergänzen.
+- [x] Reale ENOSPC-Dateisystemtests auf separatem HFS+-Abbild und Linux-tmpfs:
+  Anlage, Journal, partielle Appends, Kompaktierung, Recovery und Wiederholen.
+- [ ] Fehler an den übrigen Kerneloperationen einschließlich Engine-Allokationen
+  bei echtem Modell systematisch injizieren.
 - [x] Echte Modelltests separat halten. Die bisherige Re-Indexierungsprüfung ersetzen:
   alte Chunk-Generationen müssen tatsächlich ausgeschlossen werden.
 - [x] `make test` führt modellunabhängige Core-/Store-/Format-/Import-/Auswertungstests aus; `make check` ergänzt Header-Prüfungen.
@@ -233,7 +236,8 @@ prüfbaren Zwischenstand; die jeweils nächste baut auf dessen Garantien auf.
   weitergehende Format- und Plattformziele stehen separat als offene Punkte.
 - [x] Pflichtprüfungen können nicht durch fehlende Modelle oder pauschale Skips grün werden.
 - [x] Die CI-Definition ruft dieselben Make-Targets wie die lokale Entwicklung auf.
-  Erfolgreiche entfernte CI-Läufe sind noch nicht nachgewiesen.
+  Erfolgreiche GitHub-CI-Läufe sind noch nicht nachgewiesen. Der vorbereitete
+  Abnahmebranch wartet nach automatischer Freigabeprüfung auf Veröffentlichungszustimmung.
 - [x] Fuzz- und Fehlerfalltests laufen mit festgelegten Zeit-/Speicherbudgets.
 
 ## 4 — Plattform-Builds, statisches Linken und Integration
@@ -275,6 +279,7 @@ prüfbaren Zwischenstand; die jeweils nächste baut auf dessen Garantien auf.
 | `all` / `lib`, `engine` | Eigenes statisches Archiv bzw. Engine-Archiv bauen |
 | `help`, `print-config` | Bedienung und aufgelöste Konfiguration anzeigen |
 | `test`, `test-unit`, `test-store` | Modellunabhängige Pflichtprüfungen |
+| `test-enospc`, `prepare-model` | Echte Platzmangelfälle auf Testdateisystem bzw. SHA-gebundene Modellvorbereitung |
 | `test-format`, `test-import`, `import-tool` | Byte-Format und Migration prüfen bzw. Import-CLI bauen |
 | `test-e2e` | Tests mit explizit bereitgestelltem Modell |
 | `check` | Tests und C-/C++-Header mit strengen Compiler-Warnungen |
@@ -289,7 +294,10 @@ prüfbaren Zwischenstand; die jeweils nächste baut auf dessen Garantien auf.
 ### Fertig, wenn
 
 - [ ] Jedes zugesagte Profil besteht seine native Abnahme; Cross-Compile allein zählt nicht.
-- [ ] Der Linux-static-Consumer benötigt keine dynamischen Bibliotheken.
+- [x] Der Linux-musl-ARM64-Consumer läuft vollständig statisch; kein ELF-Interpreter
+  und keine dynamischen Abhängigkeiten. Native x86-64-Abnahme steht separat aus.
+- [x] Pi5 mit GCC/Clang und generisches Linux ARM64 prüfen; Ubuntu ARM64 mit
+  GCC/Clang/Sanitizern sowie Alpine musl-static bestehen die dokumentierten Tests.
 - [x] Der macOS-Consumer benötigt im Basisprofil keine Homebrew-Laufzeitbibliotheken.
 - [x] Ein Profilwechsel funktioniert ohne manuelles Bereinigen fremder Build-Artefakte.
 - [x] Ein frisch installierter Consumer baut und läuft mit dokumentierten Befehlen.
@@ -311,8 +319,14 @@ prüfbaren Zwischenstand; die jeweils nächste baut auf dessen Garantien auf.
   Store-Kapazität, Prozess-RSS und p50/p95 messen (100.000 und 1 Mio. Chunks).
 - [x] `make bench-model` implementieren: Modell-Digest, Hash-/Startzeit,
   Tokenzahlen, Embedding-Zeiten und Prozess-RSS; Testlauf mit Mock klar kennzeichnen.
-- [ ] Diesen Messlauf mit echtem GGUF ausführen; Indexierung/Re-Indexierung und
-  Allokationsspitzen der vollständigen Modellanwendung auf Zielhardware messen.
+- [x] Echten GGUF-Messlauf auf macOS und Pi5 ausführen: Hashing, Modellstart,
+  Embedding-Latenz und Peak-RSS; Herkunft, Original- und vorbereiteten SHA festhalten.
+- [x] Echte Indexierung/Re-Indexierung, Mehrfenster-Chunking, Kompaktierung und
+  Wiederöffnen auf macOS und Pi5 prüfen.
+- [x] Vollständigen Pi5-Modelltest mit ASan/UBSan und explizitem LeakSanitizer
+  abnehmen; reproduziertes Engine-Leck (512 Bytes) im versionierten Patch beheben.
+- [ ] Allokationsspitzen und Fehlereinbringung der vollständigen Modellanwendung
+  systematisch auf Zielhardware abnehmen.
 - [x] Den reinen Suchscan getrennt von Tokenisierung und Modellinferenz messen.
   Die eigene allokationsfreie Suchschleife ist keine Zusage für den ganzen Recall-Aufruf.
 - [x] Reproduzierbare Korpora mit kleinen Stores und beispielsweise 100.000 sowie
@@ -320,9 +334,11 @@ prüfbaren Zwischenstand; die jeweils nächste baut auf dessen Garantien auf.
 - [x] Eigenen Apache-2.0-DE/EN-Testkorpus im Repository bereitstellen (8 Dokumente, 16 Fragen)
   und Float-Cosinus gegen Sign-Hamming vergleichen: Recall@1/3, MRR und Top-3-
   Übereinstimmung, insgesamt und pro Abfragesprache. Auswertung unabhängig testen.
-- [ ] Mit echtem Modell ausführen und Ergebnisse veröffentlichen. Zusätzlich
-  einen repräsentativen größeren Korpus wählen; der kleine Testkorpus genügt nicht
-  als allgemeiner Qualitätsnachweis. Modell, Präfix und Chunking dabei festhalten.
+- [x] Kleinen Korpus mit echtem Modell ausführen und Ergebnisse in MODEL_BENCHMARK.md
+  veröffentlichen, einschließlich Präfix, Chunking, Backend und Modell-Hashes.
+- [ ] Repräsentativen größeren Korpus und Qualitätsgrenzen wählen; der kleine Testkorpus
+  genügt nicht als allgemeiner Qualitätsnachweis. Numerische Referenzgleichheit
+  der Engine gegen Microsoft ist durch diese Abnahme ebenfalls nicht bewiesen.
 - [x] Erst danach über SIMD, mmap, alternative Top-k-Verfahren oder ANN entscheiden.
   Jede Optimierung benötigt Referenzvergleich und Messung auf Zielhardware.
 
@@ -331,7 +347,8 @@ prüfbaren Zwischenstand; die jeweils nächste baut auf dessen Garantien auf.
 - [ ] Pi- und Plattformversprechen sind durch veröffentlichte Messungen gedeckt.
 - [x] Speichergrenzen und das Verhalten bei Erreichen der Grenzen sind getestet.
 - [x] Wiederholtes Re-Indexieren lässt sich durch Kompaktierung kontrolliert bereinigen.
-- [ ] Qualitätsverluste der binären Quantisierung sind nachvollziehbar ausgewiesen.
+- [x] Qualitätsverluste der binären Quantisierung im kleinen gemessenen Korpus
+  pro Sprache und Backend ausweisen; Verallgemeinerung bleibt offen.
 
 ## 6 — Dokumentation und Release-Abnahme
 
@@ -356,7 +373,8 @@ Ein Release als Vorzeigeprojekt erfolgt erst, wenn:
 - [x] Nachgewiesene ursprüngliche Speicherfehler lokal korrigiert und regressionsgetestet.
 - [x] Transaktions-/Recovery-Fehlerfalltests bestehen lokal.
 - [ ] Zugesagte Plattformmatrix einschließlich Consumer- und Linkprüfungen ist grün.
-- [ ] Echte Modelltests und veröffentlichte Zielhardware-/Qualitätsmessungen liegen vor.
+- [x] Erste echte Modelltests und veröffentlichte Pi5-/Qualitätsmessungen liegen vor.
+- [ ] Repräsentative Qualitätsabnahme und numerische Engine-Referenzprüfung abschließen.
 - [x] Installation, Paketprüfung und kompilierte Beispiele funktionieren lokal.
 - [ ] Abschließende Sicherheits-/Datenintegritätsabnahme einschließlich offener
   Formatgrenzen durchführen, bevor das Projekt als Vorzeige-Release bezeichnet wird.

@@ -50,5 +50,93 @@ A completed benchmark reports measurements; it does not enforce a quality
 threshold. The tiny corpus is useful for regressions and inspecting quantization
 loss, but cannot establish multilingual retrieval quality. Before release, run
 with the intended GGUF and policy, save the output, choose a larger representative
-corpus and define acceptance thresholds from those results. No genuine-model
-measurement is currently recorded in this repository.
+corpus and define acceptance thresholds from those results. The first genuine-model measurement is recorded below.
+
+
+## Reproduce the first real-model run
+
+Source: [Microsoft BitNet embedding 0.6B](https://huggingface.co/microsoft/bitnet-embedding-0.6b),
+GGUF revision `459a4718ed183ebbf5d7c89e4908f66322790e9b`, MIT license.
+The official file is 427935008 bytes, SHA-256
+`c89c64f05a2d3f83565250a6762640197fc624df866d4a1bd5853f811219af17`.
+The model card specifies last-token/EOS pooling, L2 normalization and per-projection
+input normalization. It has 1024 embedding dimensions. This is the model actually
+downloaded and tested; the 270M variant is not covered.
+
+The pinned engine rejects the original file. `make prepare-model` uses a small
+Python 3.11+ standard-library tool to prepare this exact SHA-pinned input:
+
+1. Add the engine's projection-input-norm and last-token-pooling metadata keys.
+2. Expand one-dimensional F16 normalization tensors exactly to F32, as required
+   by its loader. Tensor values are preserved; token embeddings and packed I2_S
+   bytes are copied. No retraining or requantization is performed.
+3. Require the deterministic output SHA-256
+   `4321e21b9da533f40386aa5ab968cced6196e21ecbf395ae04e5bce1ee88e767`
+   before atomically publishing the new file. Preserve the source and an existing
+   destination on input rejection. Other model hashes are refused.
+
+This Python tool is optional model setup, not a dependency of library builds or
+model-free tests. Model weights remain outside the repository and packages.
+The required engine corrections are described in [patches/README.md](../patches/README.md).
+
+```sh
+mkdir -p build/models
+curl -fL https://huggingface.co/microsoft/bitnet-embedding-0.6b/resolve/459a4718ed183ebbf5d7c89e4908f66322790e9b/bitnet-embeddings-0.6b-bf16-i2_s.gguf \
+  -o build/models/bitnet-original.gguf
+make prepare-model BITNET_SOURCE=build/models/bitnet-original.gguf
+GM_QUERY_PREFIX='query: ' GM_OMIT_BOS=1 GM_OMIT_EOS=0 \
+  GEIST_EMBED_GGUF_PATH="$PWD/build/models/bitnet-embedding-0.6b-geist.gguf" make bench-model
+GEIST_EMBED_GGUF_PATH="$PWD/build/models/bitnet-embedding-0.6b-geist.gguf" make test-e2e
+```
+
+On the Pi, also run the complete real-model lifetime test with Linux leak
+detection enabled (macOS ASan does not provide the same leak check):
+
+```sh
+ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 UBSAN_OPTIONS=halt_on_error=1 \
+  make -j4 TARGET=pi5 CC=clang BACKENDS=cpu_neon MODE=asan \
+  GEIST_EMBED_GGUF_PATH="$PWD/build/models/bitnet-embedding-0.6b-geist.gguf" \
+  check fuzz test-e2e
+```
+
+## First measured result: macOS ARM64, 2026-09-06
+
+Apple Clang 21, release, scalar CPU backend, native GEMM; prepared model hash as
+above, query prefix `query: `, BOS omitted, EOS retained, original 8-document /
+16-query corpus. No numerical-equivalence claim against Microsoft's inference
+implementation is established by this test.
+
+| Queries | Float Recall@1 | Binary Recall@1 | Float Recall@3 | Binary Recall@3 | Float MRR | Binary MRR |
+| --- | --- | --- | --- | --- | --- | --- |
+| All 16 | 93.75% | 87.50% | 93.75% | 100% | 0.9531 | 0.9271 |
+| German 8 | 87.50% | 75.00% | 87.50% | 100% | 0.9062 | 0.8542 |
+| English 8 | 100% | 100% | 100% | 100% | 1.0000 | 1.0000 |
+
+Top-three overlap: 0.7292 overall. Hashing: 2.105 s; engine open/probe: 0.694 s;
+291 document tokens: 119.723 s; 274 query tokens: 115.329 s. Query latency p50:
+7.159 s, p95: 9.911 s. Peak process RSS: 2044.5 MiB. Other acceptance processes
+were running on the same host; these are diagnostic measurements, not isolated
+performance claims. The model memory is outside the store budget.
+
+The real E2E test passed indexing, English retrieval, same-ID replacement,
+obsolete-generation exclusion, a two-window document, compaction, reopening,
+stable ordered hits and model-identity rejection. The multiwindow fixture uses
+24 paragraphs; much larger admission boundaries are covered by model-free tests.
+
+
+## Pi5 NEON measurement
+
+Same prepared model hash, corpus and token policy, GCC 14.2 release,
+`TARGET=pi5 BACKENDS=cpu_neon`, native GEMM and no OpenMP. Float Recall@1 is
+93.75%, binary Recall@1 93.75%; Float Recall@3 93.75%, binary Recall@3 100%.
+Float MRR is 0.9531, binary MRR 0.9688, top-three overlap 0.7708.
+German binary Recall@1 is 87.5%; English is 100%.
+
+Hashing: 3.952 s; engine open/probe: 0.228 s; document embeddings: 6.180 s;
+queries: 5.671 s. Query p50: 351.286 ms, p95: 489.931 ms. Peak process RSS:
+714.11 MiB. This explicitly accelerated backend is substantially faster and
+smaller than the measured scalar backend; it adds no external runtime library.
+
+The binary ranking differs slightly between the two engine backends. These
+results do not establish bit-identical embeddings across platforms/backends,
+nor do they isolate hardware performance from backend implementation differences.

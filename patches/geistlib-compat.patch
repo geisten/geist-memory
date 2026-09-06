@@ -106,3 +106,13 @@
  #define B0(b)                                                                          \
      ((uint8_t) ((b) & 1)), ((uint8_t) (((b) >> 1) & 1)), ((uint8_t) (((b) >> 2) & 1)), \
              ((uint8_t) (((b) >> 3) & 1)), ((uint8_t) (((b) >> 4) & 1)),                \
+--- a/src/archs/transformer/arch_state.c
++++ b/src/archs/transformer/arch_state.c
+@@ -1587,6 +1587,7 @@
+          * once below. */
+         struct geist_buffer *infra[] = {
+                 sess->scratch_normed,
++                sess->scratch_proj_in,
+                 sess->scratch_q,
+                 sess->scratch_k,
+                 sess->scratch_v,

@@ -86,9 +86,10 @@ $(BUILD)/memory: examples/memory.c $(LIB) $(ENGINE_LIB)
 .PHONY: example
 example: $(BUILD)/memory
 install: $(LIB) $(ENGINE_LIB)
-	install -d '$(DESTDIR)$(PREFIX)/include' '$(DESTDIR)$(PREFIX)/lib/pkgconfig' '$(DESTDIR)$(PREFIX)/share/doc/geist-memory/docs'
+	install -d '$(DESTDIR)$(PREFIX)/include' '$(DESTDIR)$(PREFIX)/lib/pkgconfig' '$(DESTDIR)$(PREFIX)/share/doc/geist-memory/docs' '$(DESTDIR)$(PREFIX)/share/doc/geist-memory/patches'
 	install -m 644 LICENSE README.md PLAN.md CHANGELOG.md CONTRIBUTING.md '$(DESTDIR)$(PREFIX)/share/doc/geist-memory/'
 	install -m 644 docs/*.md '$(DESTDIR)$(PREFIX)/share/doc/geist-memory/docs/'
+	install -m 644 patches/*.patch patches/*.md '$(DESTDIR)$(PREFIX)/share/doc/geist-memory/patches/'
 	install -m 644 $(ENGINE_SRC)/LICENSE '$(DESTDIR)$(PREFIX)/share/doc/geist-memory/GEIST-LICENSE'
 	install -m 644 $(ENGINE_SRC)/NOTICE '$(DESTDIR)$(PREFIX)/share/doc/geist-memory/GEIST-NOTICE'
 	install -m 644 include/geist_memory.h '$(DESTDIR)$(PREFIX)/include/'
@@ -106,6 +107,7 @@ check-install: $(LIB) $(ENGINE_LIB)
 check-linkage: $(BUILD)/consumer
 	$(BUILD)/consumer
 	sh tools/check-linkage.sh $(BUILD)/consumer $(LINK)
+	sh test/test_linkage.sh
 
 FUZZ_RUNS ?= 3000
 FUZZ_SECONDS ?= 30

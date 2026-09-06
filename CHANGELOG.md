@@ -36,4 +36,13 @@
 - Mark completed and pending plan items individually, with native and real-model
   acceptance kept separate from implementation.
 
-Native Linux/Pi and real-model validation remain outstanding; see docs/VALIDATION.md.
+- Complete native Pi5 and Ubuntu/Alpine ARM64 acceptance, including fully static
+  musl consumers and real ENOSPC recovery. Add dependency-policy regressions.
+- Carry a versioned, checksum-bound engine patch for generic ARM64 CPU guards
+  and sufficient bounded embedding-layer ownership tracking. Free the projection
+  scratch alias omitted by engine session cleanup, found by Pi LeakSanitizer.
+- Download and SHA-pin the official BitNet embedding 0.6B. Add optional exact
+  preparation for the pinned engine and publish genuine DE/EN and Pi5 measurements.
+
+Native x86-64/GitHub and representative quality acceptance remain outstanding;
+see docs/VALIDATION.md.

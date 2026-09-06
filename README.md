@@ -16,7 +16,7 @@ The whole store, including obsolete chunks, resides in RAM until compaction.
 
 ## Build and use
 
-Requires GNU Make 3.81+, a C23 compiler (GCC 14+ or Clang 19+), Git and POSIX
+Requires GNU Make 3.81+, a C23 compiler (GCC 14+ or Clang 19+), Git, patch and POSIX
 build tools. C23 library features have centralized GCC/Clang fallbacks where
 libc lacks `<stdckdint.h>` or `<stdbit.h>`. See [validation](docs/VALIDATION.md)
 for the compiler/platform combinations actually tested.
@@ -122,7 +122,7 @@ parent directory must exist. Original document text is not stored.
 
 Packages normalize entry order, ownership, permissions and timestamps. Set
 `SOURCE_DATE_EPOCH` (integer Unix seconds) to choose the timestamp; the default
-is 2000-01-01 UTC. Packaging requires GNU tar or bsdtar and gzip. Reproducibility requires matching source, configuration,
+is 2000-01-01 UTC. Packaging requires GNU tar or bsdtar and gzip. Reproducibility requires matching source (including the pinned engine patch), configuration,
 compiler, tar and gzip implementations. Debug paths and cross-toolchain byte
 identity are outside this guarantee. `check-repro` requires release mode.
 
@@ -165,8 +165,8 @@ short I/O, sync failures, interrupted replacement/creation/compaction and interr
 recovery. CI calls the same Make targets on Linux x86-64/ARM64, macOS ARM64 and
 Linux musl static. A workflow definition is not evidence of a successful run.
 
-Native Linux/Pi tests, real-model results and float-versus-binary retrieval
-measurements remain release gates. This is not yet a finished showcase release.
+Acceptance results are tracked in docs/VALIDATION.md. A broader retrieval
+corpus and the complete native platform matrix remain release gates. This is not yet a finished showcase release.
 See [PLAN.md](PLAN.md) and [validation evidence](docs/VALIDATION.md).
 
 ## Contributing and license
