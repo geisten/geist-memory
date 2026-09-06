@@ -108,6 +108,11 @@ bool gm_store_path_too_long(const char *path);
                                            struct gm_hit    out[static k],
                                            size_t          *n_out);
 
+/* FNV-1a over arbitrary bytes. Shared so the store's path index and the
+ * library's model fingerprint hash the same way, rather than each carrying
+ * its own copy of the constants. */
+uint64_t gm_fnv1a(const void *data, size_t len);
+
 /* Read a whole file into a NUL-terminated heap buffer. `*out_len` excludes
  * the terminator. A missing file yields nullptr, length 0 and GM_OK — which
  * is how gm_store_open tells "new store" from "broken store". Shared so the

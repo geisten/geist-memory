@@ -2,6 +2,9 @@
 
 #include "gm_store.h"
 
+#include "base/checked.h"
+#include "base/heap.h"
+
 #include <errno.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -44,7 +47,23 @@ struct gm_store {
     struct gm_doc_rec   *docs;   /* n_docs */
     size_t               n_chunks, cap_chunks;
     size_t               n_docs, cap_docs;
+
+    /* Path -> document index. Open addressing, linear probing, power-of-two
+     * capacity held at or above 2x n_docs so the table stays under half
+     * full. A slot holds a document index; GM_SLOT_EMPTY marks it free and
+     * the path is compared against docs[idx].path on a hit, so no hash is
+     * stored beside it.
+     *
+     * It replaces a linear strcmp scan that ran once per indexed document:
+     * 4.9 ms over 1k documents, 615 ms over 20k -- quadratic in a tree pass,
+     * against a README that calls re-running over a tree cheap. Rebuilt from
+     * docs[] on growth and at open, never persisted: a derived index on disk
+     * is a second thing that can be wrong. */
+    uint32_t *index;
+    size_t    index_cap; /* power of two, or 0 while empty */
 };
+
+#define GM_SLOT_EMPTY UINT32_MAX
 
 static const char *const VECS_NAME   = "vectors.gm";
 static const char *const CHUNKS_NAME = "chunks.gm";
@@ -53,6 +72,16 @@ static const char *const DOCS_NAME   = "docs.gm";
 /* dir[] is bounded by the caller's check in gm_store_open; the longest name
  * above plus a separator is 11 bytes. */
 enum { GM_DIR_MAX = 512u, GM_PATHBUF = GM_DIR_MAX + 16u };
+
+uint64_t gm_fnv1a(const void *data, size_t len) {
+    const uint8_t *p = (const uint8_t *) data;
+    uint64_t       h = 1469598103934665603ULL;
+    for (size_t i = 0; i < len; i++) {
+        h ^= p[i];
+        h *= 1099511628211ULL;
+    }
+    return h;
+}
 
 enum gm_status gm_read_file(const char *path, uint8_t **out, size_t *out_len) {
     *out     = nullptr;
@@ -89,6 +118,10 @@ enum gm_status gm_read_file(const char *path, uint8_t **out, size_t *out_len) {
     return GM_OK;
 }
 
+/* Defined below with the rest of the path index; gm_store_open builds the
+ * table once the document array is in place. */
+[[nodiscard]] static enum gm_status index_reserve(struct gm_store *st, size_t n_docs);
+
 /* Validate a loaded file's header and report how many records follow. */
 static enum gm_status validate_header(
         const uint8_t *buf, size_t len, size_t rec_size, size_t dim, uint64_t model_fp,
@@ -104,8 +137,12 @@ static enum gm_status validate_header(
     if (h.dim != dim || h.model_fp != model_fp) {
         return GM_E_MODEL;
     }
-    if ((len - sizeof h) / rec_size < h.count) {
-        return GM_E_FORMAT; /* truncated: the header promises more than exists */
+    /* h.count comes off disk, so this product is untrusted input times a
+     * size (AGENT.md §3). A wrap here would under-allocate and then copy the
+     * full length into it. */
+    size_t need = 0;
+    if (ckd_mul(&need, (size_t) h.count, rec_size) || need > len - sizeof h) {
+        return GM_E_FORMAT; /* truncated, or a count no allocation could hold */
     }
     *out_count = (size_t) h.count;
     return GM_OK;
@@ -159,9 +196,10 @@ static enum gm_status open_file(const char     *dir,
         free(buf);
         return s;
     }
+    /* validate_header already proved this product does not overflow. */
     const size_t bytes = *out_count * rec_size;
     if (bytes > 0) {
-        void *dst = malloc(bytes);
+        void *dst = heap_alloc_aligned(bytes, OPTIMAL_ALIGNMENT);
         if (dst == nullptr) {
             free(buf);
             return GM_E_OOM;
@@ -245,7 +283,12 @@ enum gm_status gm_store_open(const char *dir, size_t dim, uint64_t model_fp, str
     st->docs       = docs;
     st->cap_chunks = st->n_chunks;
     st->cap_docs   = st->n_docs;
-    *out           = st;
+    s              = index_reserve(st, st->n_docs);
+    if (s != GM_OK) {
+        gm_store_close(st);
+        return s;
+    }
+    *out = st;
     return GM_OK;
 }
 
@@ -259,9 +302,11 @@ void gm_store_close(struct gm_store *st) {
             fclose(files[i]->fh);
         }
     }
-    free(st->vecs);
-    free(st->chunks);
-    free(st->docs);
+    void *v = st->vecs, *c = st->chunks, *d = st->docs, *ix = st->index;
+    safe_free(&v);
+    safe_free(&c);
+    safe_free(&d);
+    safe_free(&ix);
     free(st);
 }
 
@@ -297,17 +342,82 @@ size_t gm_store_live_chunks(const struct gm_store *st) {
     return n;
 }
 
-static size_t find_doc(const struct gm_store *st, const char *path) {
-    /* ponytail: linear strcmp. O(n_docs) per document, so indexing a tree is
-     * quadratic in the number of files — measured 4.9 ms at 1k docs, 615 ms
-     * at 20k. Add a path hash map when a tree pass is visibly slow; one
-     * lookup per document (not two) is what makes that threshold reachable. */
-    for (size_t i = 0; i < st->n_docs; i++) {
-        if (strcmp(st->docs[i].path, path) == 0) {
+/* Probe sequence for `path`: the slot holding it, or the first free slot if
+ * it is absent. One walk answers both "where is it" and "where does it go",
+ * which is why lookup and insert share it. */
+static size_t index_slot(const struct gm_store *st, const char *path, uint64_t h) {
+    const size_t mask = st->index_cap - 1u;
+    size_t       i    = (size_t) h & mask;
+    while (st->index[i] != GM_SLOT_EMPTY) {
+        if (strcmp(st->docs[st->index[i]].path, path) == 0) {
             return i;
         }
+        i = (i + 1u) & mask;
     }
-    return SIZE_MAX;
+    return i;
+}
+
+/* Rebuild at `cap` slots (a power of two) from docs[]. Rebuilding rather
+ * than migrating keeps one insertion path, and the table is small: four
+ * bytes a slot, so 20k documents is 256 KB. */
+[[nodiscard]] static enum gm_status index_rebuild(struct gm_store *st, size_t cap) {
+    size_t bytes = 0;
+    if (ckd_mul(&bytes, cap, sizeof *st->index)) {
+        return GM_E_OOM;
+    }
+    uint32_t *table = heap_alloc_aligned(bytes, OPTIMAL_ALIGNMENT);
+    if (table == nullptr) {
+        return GM_E_OOM;
+    }
+    memset(table, 0xff, bytes); /* GM_SLOT_EMPTY is all-ones */
+
+    void *old = st->index;
+    safe_free(&old);
+    st->index     = table;
+    st->index_cap = cap;
+
+    for (size_t i = 0; i < st->n_docs; i++) {
+        const char    *p = st->docs[i].path;
+        const uint64_t h = gm_fnv1a(p, strlen(p));
+        st->index[index_slot(st, p, h)] = (uint32_t) i;
+    }
+    return GM_OK;
+}
+
+/* Hold the table at or above 2x the document count so probes stay short. */
+[[nodiscard]] static enum gm_status index_reserve(struct gm_store *st, size_t n_docs) {
+    size_t want = 64u;
+    while (want < n_docs * 2u) {
+        want *= 2u;
+    }
+    return want > st->index_cap ? index_rebuild(st, want) : GM_OK;
+}
+
+static size_t find_doc(const struct gm_store *st, const char *path) {
+    if (st->index_cap == 0u) {
+        return SIZE_MAX;
+    }
+    const size_t slot = index_slot(st, path, gm_fnv1a(path, strlen(path)));
+    return st->index[slot] == GM_SLOT_EMPTY ? SIZE_MAX : (size_t) st->index[slot];
+}
+
+/* Grow a heap.h-allocated block. realloc is NOT an option on one: heap.h
+ * hands back over-aligned memory and has no realloc of its own -- AGENT.md
+ * §3 calls that a gap, not a licence to mix the two allocators. Growth is
+ * allocate-copy-free, so ownership stays uniform across every array in the
+ * store, which is worth more than the one avoided copy. */
+[[nodiscard]] static enum gm_status
+grow_block(void **p, size_t used_bytes, size_t want_bytes) {
+    void *fresh = heap_alloc_aligned(want_bytes, OPTIMAL_ALIGNMENT);
+    if (fresh == nullptr) {
+        return GM_E_OOM;
+    }
+    if (used_bytes > 0) {
+        memcpy(fresh, *p, used_bytes);
+    }
+    safe_free(p);
+    *p = fresh;
+    return GM_OK;
 }
 
 static size_t next_cap(size_t cap, size_t need) {
@@ -326,18 +436,21 @@ static size_t next_cap(size_t cap, size_t need) {
     if (need <= st->cap_chunks) {
         return GM_OK;
     }
-    const size_t next = next_cap(st->cap_chunks, need);
-    uint8_t     *v    = realloc(st->vecs, next * st->bytes);
-    if (v == nullptr) {
+    const size_t next     = next_cap(st->cap_chunks, need);
+    size_t       vec_bytes = 0, rec_bytes = 0;
+    if (ckd_mul(&vec_bytes, next, st->bytes) ||
+        ckd_mul(&rec_bytes, next, sizeof(struct gm_chunk_rec))) {
         return GM_E_OOM;
     }
-    st->vecs               = v;
-    struct gm_chunk_rec *c = realloc(st->chunks, next * sizeof *c);
-    if (c == nullptr) {
-        return GM_E_OOM; /* vecs keeps the larger block; cap_chunks is not
-                          * advanced, so the next attempt retries both. */
+    enum gm_status s = grow_block((void **) &st->vecs, st->n_chunks * st->bytes, vec_bytes);
+    if (s != GM_OK) {
+        return s;
     }
-    st->chunks     = c;
+    s = grow_block((void **) &st->chunks, st->n_chunks * sizeof(struct gm_chunk_rec), rec_bytes);
+    if (s != GM_OK) {
+        return s; /* vecs keeps the larger block; cap_chunks is not advanced,
+                   * so the next attempt retries both. */
+    }
     st->cap_chunks = next;
     return GM_OK;
 }
@@ -371,13 +484,23 @@ enum gm_status gm_store_put_doc(struct gm_store   *st,
     }
 
     if (st->n_docs + 1u > st->cap_docs) {
-        const size_t       next = next_cap(st->cap_docs, st->n_docs + 1u);
-        struct gm_doc_rec *d    = realloc(st->docs, next * sizeof *d);
-        if (d == nullptr) {
+        const size_t next  = next_cap(st->cap_docs, st->n_docs + 1u);
+        size_t       bytes = 0;
+        if (ckd_mul(&bytes, next, sizeof *st->docs)) {
             return GM_E_OOM;
         }
-        st->docs     = d;
+        const enum gm_status g =
+                grow_block((void **) &st->docs, st->n_docs * sizeof *st->docs, bytes);
+        if (g != GM_OK) {
+            return g;
+        }
         st->cap_docs = next;
+    }
+    /* Grow the index BEFORE the record exists: a rebuild walks docs[], so it
+     * must not see a half-written entry. */
+    const enum gm_status ir = index_reserve(st, st->n_docs + 1u);
+    if (ir != GM_OK) {
+        return ir;
     }
     struct gm_doc_rec *d = &st->docs[st->n_docs];
     memset(d, 0, sizeof *d);
@@ -388,8 +511,9 @@ enum gm_status gm_store_put_doc(struct gm_store   *st,
 
     const enum gm_status s = append_rec(&st->doc_f, d, sizeof *d, (uint64_t) (st->n_docs + 1u));
     if (s != GM_OK) {
-        return s;
+        return s; /* the record is not counted, so the index stays consistent */
     }
+    st->index[index_slot(st, d->path, gm_fnv1a(d->path, strlen(d->path)))] = (uint32_t) st->n_docs;
     *out_doc   = st->n_docs++;
     *out_state = GM_DOC_NEW;
     return GM_OK;
