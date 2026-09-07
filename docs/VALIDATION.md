@@ -269,3 +269,21 @@ startup allocations and 24 sampled startup sites (1065 total startup calls).
 This is bounded coverage, not exhaustive startup/kernel fault acceptance.
 Pi Clang 19 ASan/UBSan/LeakSanitizer passes the corrected tokenizer regression,
 full-model lifetime and E2E, plus all six large startup allocation failures.
+
+Final implementation commit:
+[`af9e003455fad3aeb0bc33a747489c051cffef5b`](https://github.com/geisten/geist-memory/commit/af9e003455fad3aeb0bc33a747489c051cffef5b).
+All **8/8 jobs pass** in
+[the final platform CI run](https://github.com/geisten/geist-memory/actions/runs/34096158448):
+Linux x86-64/ARM64 GCC 14 and Clang 19, macOS x86-64/ARM64, and fully static
+Linux musl consumers on both architectures. The Linux logs explicitly confirm
+all 40 real-tokenizer allocation faults and allocator-wrapper self-tests under
+sanitizers. macOS also verifies byte-identical packages from two fresh builds.
+
+The final Pi driver exits successfully with all 53 process logs after the
+numeric peak-gate correction. The actual gate accepts the optimized baseline
+and rejects the captured pre-optimization baseline. All 51 injected failures
+return errors (37 engine, 14 OOM); every process ends with zero tracked live
+bytes. Final detailed local logs are under
+`build/acceptance/large-model/memory-faults-verified-final/` (ignored build output).
+This final evidence update changes documentation only; the linked CI run tests
+the complete implementation and workflow changes.
