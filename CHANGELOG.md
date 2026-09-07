@@ -19,6 +19,10 @@
   API/ABI; rebuild consumers against the installed header and matching archives.
 - Pin geistlib, separate configuration artifacts, add Make test/link/install/fuzz/
   benchmark/package targets and a small CLI. No model weights are bundled.
+- `make deps` is the one way to obtain geistlib: `tools/fetch-dep.sh` clones
+  `GEIST_REPO` into `build/deps/geistlib` at the pin and applies the compat patch.
+  `GEISTLIB=` is gone; a local path in `GEIST_REPO` builds offline. `check-deps`
+  keeps the script byte-identical with geistlib's reference copy.
 - Split the geistlib embedder out of the core archive. `libgeist_memory.a` has no
   geistlib dependency; `libgeist_memory_geist.a` implements the now public
   link-time contract `geist_memory_embedder.h`. Consumers link

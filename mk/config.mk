@@ -1,7 +1,11 @@
 # GNU Make 3.81+; no network access or engine dependency for core tests.
+# `make deps` is the only step that touches the network; a local path works too.
 MODE ?= release
-GEISTLIB ?= ../geistlib
-GEIST_REV := 32b432660948a50be05b355efa74a789456a37dd
+ifdef GEISTLIB
+$(error GEISTLIB is gone; set GEIST_REPO=<url or path> and run make deps)
+endif
+GEIST_REPO ?= https://github.com/geisten/geistlib.git
+GEIST_REV := 9030b783bbbf2a43bd95ca688dc0a3b2e11414b7
 ENGINE_PATCH := patches/geistlib-compat.patch
 ENGINE_PATCH_ID := $(shell cksum $(ENGINE_PATCH) | cut -d' ' -f1)
 TARGET ?= $(shell uname -s | tr A-Z a-z)-$(shell uname -m)
@@ -91,7 +95,8 @@ CONFIG := $(shell printf '%s\n' '$(CC)|$(shell $(CC) --version | head -1)|$(TARG
 BUILD := build/$(TARGET)/$(MODE)/$(CONFIG)
 LIB := $(BUILD)/libgeist_memory.a
 ADAPTER_LIB := $(BUILD)/libgeist_memory_geist.a
-ENGINE_SRC := $(abspath build/engine-source/$(GEIST_REV)-$(ENGINE_PATCH_ID))
+# Populated by `make deps`; check-engine verifies its stamp against the pins above.
+ENGINE_SRC := $(abspath build/deps/geistlib)
 ENGINE_LIB := $(abspath $(BUILD)/engine/libgeist.a)
 # Link order for static archives: core, then the embedder it calls, then geistlib.
 GEIST_LIBS := $(LIB) $(ADAPTER_LIB) $(ENGINE_LIB)

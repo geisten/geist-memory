@@ -1,10 +1,12 @@
 # Pinned engine corrections
 
 `geistlib-compat.patch` applies only to geistlib
-`32b432660948a50be05b355efa74a789456a37dd`. Make includes the patch checksum in
-both the exported-source directory and build configuration. The neighbouring
-geistlib checkout is never modified. Patch application is mandatory and fails
-the build if its expected source no longer matches.
+`9030b783bbbf2a43bd95ca688dc0a3b2e11414b7` (engine code identical to
+`32b432660948a50be05b355efa74a789456a37dd`; the newer pin adds only
+`tools/fetch-dep.sh`). `make deps` applies it to `build/deps/geistlib` and records
+the patch checksum in that tree's stamp; the build configuration carries the same
+checksum. The source repository is never modified. Patch application is mandatory
+and fails `make deps` if its expected source no longer matches.
 
 The acceptance runs reproduced these issues:
 

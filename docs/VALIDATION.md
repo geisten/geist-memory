@@ -1,7 +1,9 @@
 # Validation evidence
 
 Local run: 2026-09-06, macOS 26.6.2, ARM64. The exact CPU model was unavailable
-in the sandbox. Engine revision: `32b432660948a50be05b355efa74a789456a37dd`;
+in the sandbox. Engine revision: `32b432660948a50be05b355efa74a789456a37dd`
+(pin moved to `9030b783bbbf2a43bd95ca688dc0a3b2e11414b7` on 2026-09-07; the diff
+adds only `tools/fetch-dep.sh`, so these runs remain valid);
 Reference backend `cpu_scalar`, native GEMM, no OpenMP. The subsequent Pi model
 run explicitly selects `cpu_neon`. The engine now includes the checksum-bound
 compatibility patch documented in patches/README.md. The final patch SHA-256 is

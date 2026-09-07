@@ -92,9 +92,12 @@ prüfbaren Zwischenstand; die jeweils nächste baut auf dessen Garantien auf.
 
 ### Arbeit
 
-- [x] Einen bekannten geistlib-Commit festhalten. `GEISTLIB=/pfad` bleibt als
-  Entwicklungsoption erhalten; Abweichungen vom geprüften Commit sind sichtbar.
-  Ein ungepinntes Nachbarverzeichnis ist keine Release-Abhängigkeit.
+- [x] Einen bekannten geistlib-Commit festhalten. `make deps` holt ihn per
+  `tools/fetch-dep.sh` nach `build/deps/geistlib`; `GEIST_REPO=/pfad` klont offline
+  aus einem lokalen Repo. Der Pin steht nur in `mk/config.mk`, kein anderes Ziel
+  holt nach. Ein ungepinntes Nachbarverzeichnis ist keine Release-Abhängigkeit.
+- [x] `tools/fetch-dep.sh` ist byte-identisch mit der Referenz in geistlib;
+  `check-deps` vergleicht nach `make deps` per `cmp`.
 - [x] `make test-unit` ohne Modell und ohne Engine-Laufzeit einführen: Store-Tests
   sowie deterministische Test-Doubles an einer schmalen Embedding-Schnittstelle.
 - [x] `MODE=release`, `debug` und `asan` tatsächlich auf unterschiedliche Compile-
@@ -288,6 +291,7 @@ prüfbaren Zwischenstand; die jeweils nächste baut auf dessen Garantien auf.
 
 | Target | Bedeutung |
 | --- | --- |
+| `deps`, `check-deps` | Gepinnte geistlib holen bzw. Skript gegen die Referenzkopie prüfen |
 | `all` / `lib`, `adapter`, `engine` | Kern-Archiv, geistlib-Embedder bzw. Engine-Archiv bauen |
 | `help`, `print-config` | Bedienung und aufgelöste Konfiguration anzeigen |
 | `test`, `test-unit`, `test-store` | Modellunabhängige Pflichtprüfungen |

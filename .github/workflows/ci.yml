@@ -12,20 +12,20 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/checkout@v4
-        with:
-          repository: geisten/geistlib
-          ref: 32b432660948a50be05b355efa74a789456a37dd
-          path: build/geistlib
       - run: sudo apt-get update && sudo apt-get install -y gcc-14 g++-14 clang-19
-      - run: make -j2 check check-linkage check-install example model-tools import-tool check-package
+      - name: Core without dependencies
+        run: make -j2 check
         env:
           CC: ${{ matrix.cc }}
-          GEISTLIB: build/geistlib
+      - run: make deps check-deps
+        env:
+          CC: ${{ matrix.cc }}
+      - run: make -j2 check-linkage check-install example model-tools import-tool check-package
+        env:
+          CC: ${{ matrix.cc }}
       - run: make -j2 MODE=asan check fuzz test-model-alloc test-tokenizer-oom
         env:
           CC: ${{ matrix.cc }}
-          GEISTLIB: build/geistlib
       - name: Real ENOSPC on a disposable filesystem
         run: |
           sudo mkdir /mnt/gm-enospc
@@ -45,21 +45,15 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/checkout@v4
-        with:
-          repository: geisten/geistlib
-          ref: 32b432660948a50be05b355efa74a789456a37dd
-          path: build/geistlib
       - run: brew install llvm
       - run: echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
-      - run: make -j2 CC=clang check check-linkage check-install example model-tools import-tool check-package
-        env:
-          GEISTLIB: build/geistlib
+      - name: Core without dependencies
+        run: make -j2 CC=clang check
+      - run: make CC=clang deps check-deps
+      - run: make -j2 CC=clang check-linkage check-install example model-tools import-tool check-package
       - run: make -j2 CC=clang MODE=asan check fuzz
       - run: make CC=clang analyze format-check
       - run: make -j2 CC=clang check-repro
-        env:
-          GEISTLIB: build/geistlib
   musl-static:
     strategy:
       fail-fast: false
@@ -68,14 +62,10 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/checkout@v4
-        with:
-          repository: geisten/geistlib
-          ref: 32b432660948a50be05b355efa74a789456a37dd
-          path: build/geistlib
       - run: >-
           docker run --rm --tmpfs /enospc:size=32m -v "$PWD:/work" -w /work alpine:3.22
           sh -ec 'apk add --no-cache build-base clang git binutils tar gzip linux-headers pkgconf;
-          git config --global --add safe.directory /work/build/geistlib;
-          make -j2 CC=clang LINK=static GEISTLIB=build/geistlib
-          check check-linkage check-install example model-tools import-tool check-package test-enospc ENOSPC_DIR=/enospc'
+          make -j2 CC=clang LINK=static check;
+          make CC=clang LINK=static deps check-deps;
+          make -j2 CC=clang LINK=static
+          check-linkage check-install example model-tools import-tool check-package test-enospc ENOSPC_DIR=/enospc'

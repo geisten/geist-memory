@@ -9,7 +9,7 @@ for copy in one two; do
     mkdir "$work/$copy"
     cp -R Makefile mk patches src include test examples docs tools LICENSE README.md \
         PLAN.md CONTRIBUTING.md CHANGELOG.md .clang-format .gitattributes "$work/$copy/"
-    if ! "$make_command" -C "$work/$copy" GEISTLIB="$engine" dist > "$work/$copy.log" 2>&1; then
+    if ! "$make_command" -C "$work/$copy" GEIST_REPO="$engine" deps dist > "$work/$copy.log" 2>&1; then
         cat "$work/$copy.log" >&2
         exit 1
     fi

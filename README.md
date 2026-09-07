@@ -26,15 +26,17 @@ for the compiler/platform combinations actually tested.
 make check
 make MODE=asan check fuzz
 
-# Provide an existing geistlib checkout containing the pinned revision.
-git clone https://github.com/geisten/geistlib ../geistlib
+make deps                          # pinned geistlib into build/deps, network
+make deps GEIST_REPO=../geistlib   # or from a local clone, no network
 make lib adapter engine example
 make print-config
 ```
 
-`GEISTLIB=/path/to/geistlib` selects the source repository. Make archives commit
-`32b432660948a50be05b355efa74a789456a37dd` into its own ignored build directory;
-it never changes the source checkout or downloads dependencies. `make lib`
+`make deps` is the only step that fetches anything: `tools/fetch-dep.sh` clones
+`GEIST_REPO` into `build/deps/geistlib`, checks out commit
+`9030b783bbbf2a43bd95ca688dc0a3b2e11414b7` detached and applies the compat
+patch. No other target fetches; a missing or stale tree stops the build with
+`run make deps`. The pin lives only in `mk/config.mk`. `make lib`
 builds `libgeist_memory.a` and needs no geistlib; `make adapter` builds
 `libgeist_memory_geist.a`, the geistlib embedder; `make engine` builds
 `libgeist.a`. Artifacts live under `build/<target>/<mode>/<configuration>/`.

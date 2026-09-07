@@ -10,7 +10,7 @@ TEST_OBJECTS := $(CORE:src/%.c=$(BUILD)/test/%.o)
 DEPS := $(OBJECTS:.o=.d) $(ADAPTER_OBJECT:.o=.d) $(TEST_OBJECTS:.o=.d)
 
 .PHONY: all lib test test-unit test-store test-e2e check check-headers analyze \
-        engine check-engine adapter help print-config clean install check-install check-linkage bench fuzz
+        engine check-engine adapter deps check-deps help print-config clean install check-install check-linkage bench fuzz
 all lib: $(LIB)
 $(LIB): $(OBJECTS)
 	$(AR) rcs $@ $(OBJECTS)
@@ -48,14 +48,15 @@ check-headers:
 analyze:
 	@mkdir -p $(BUILD)/analysis
 	@for source in $(CORE) test/quality.c test/bench_model.c; do $(CC) --analyze -Werror -std=c23 -D_POSIX_C_SOURCE=200809L -D_DARWIN_C_SOURCE -D_DEFAULT_SOURCE -Iinclude -Isrc -Itest -Xanalyzer -analyzer-werror -Xanalyzer -analyzer-output=text $$source -o $(BUILD)/analysis/$$(basename $$source).plist || exit; done
-$(ENGINE_SRC)/.ready: $(ENGINE_PATCH)
-	@mkdir -p $(ENGINE_SRC)
-	git -C $(GEISTLIB) archive --format=tar --output=$(ENGINE_SRC)/source.tar $(GEIST_REV)
-	tar -xf $(ENGINE_SRC)/source.tar -C $(ENGINE_SRC)
-	rm $(ENGINE_SRC)/source.tar
-	cd $(ENGINE_SRC) && patch -p1 < $(abspath $(ENGINE_PATCH))
-	@touch $@
-check-engine: $(ENGINE_SRC)/.ready
+# Explicit fetch; nothing runs at parse time and no other target fetches.
+deps:
+	sh tools/fetch-dep.sh geistlib '$(GEIST_REPO)' $(GEIST_REV) $(ENGINE_PATCH)
+check-engine:
+	@test "$$(cat $(ENGINE_SRC)/.fetch-dep 2>/dev/null)" = '$(GEIST_REV) $(ENGINE_PATCH_ID)' || \
+	    { echo 'engine source missing or stale: run make deps'; exit 1; }
+# The script is shared verbatim across geist repositories; geistlib holds the reference.
+check-deps: check-engine
+	cmp tools/fetch-dep.sh $(ENGINE_SRC)/tools/fetch-dep.sh
 engine: $(ENGINE_LIB)
 .PHONY: FORCE
 FORCE:
@@ -73,6 +74,8 @@ print-config:
 help:
 	@printf '%s\n' 'make [lib]          static geist-memory archive' 'make check          model-free tests + C/C++ headers' \
 	 'make MODE=asan check ASan + UBSan tests' 'make analyze        Clang static analysis' \
+	 'make deps           fetch pinned geistlib into build/deps (GEIST_REPO=<url or path>)' \
+	 'make check-deps     fetch-dep.sh matches the geistlib reference copy' \
 	 'make adapter        geistlib embedder archive; make engine builds the pinned engine' 'make test-e2e       requires GEIST_EMBED_GGUF_PATH' \
 	 'make check-linkage check-install  external consumer and staged installation' \
 	 'make fuzz           deterministic corrupt-file tests (MODE=asan recommended)' \
@@ -159,7 +162,7 @@ format:
 	$(CLANG_FORMAT) -i src/*.c src/*.h include/*.h test/*.c test/*.h examples/*.c
 format-check:
 	$(CLANG_FORMAT) --dry-run --Werror src/*.c src/*.h include/*.h test/*.c test/*.h examples/*.c
-release-check: import-tool check format-check check-linkage check-install check-package fuzz test-e2e bench-model
+release-check: import-tool check format-check check-deps check-linkage check-install check-package fuzz test-e2e bench-model
 
 # Packaging creates a reviewable local artifact; it does not publish a release.
 .PHONY: dist
@@ -173,9 +176,9 @@ dist: $(GEIST_LIBS)
 	sh tools/package.sh "$$stage" '$(abspath $(BUILD))/geist-memory-$(TARGET).tar.gz'
 
 .PHONY: check-repro
-check-repro:
+check-repro: check-engine
 	@test '$(MODE)' = release || { echo 'check-repro requires MODE=release'; exit 1; }
-	+sh tools/check-repro.sh '$(abspath $(GEISTLIB))' '$(MAKE)'
+	+sh tools/check-repro.sh '$(ENGINE_SRC)' '$(MAKE)'
 
 .PHONY: bench-model test-quality
 $(BUILD)/test-quality: test/test_quality.c test/quality.c test/quality.h test/test_support.h
