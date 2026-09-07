@@ -17,7 +17,7 @@ run baseline none -1 0
 # ~1.00 GB while rejecting the former ~1.46 GB unbounded model setup.
 awk '
 /^phase=/ { for (i=1; i<=NF; i++) if ($i ~ /^peak_bytes=/) {
-    sub(/^peak_bytes=/,"",$i); if ($i > 1153433600) bad=1; seen++
+    sub(/^peak_bytes=/,"",$i); if (($i + 0) > 1153433600) bad=1; seen++
 } }
 END { if (seen != 4 || bad) exit 1 }
 ' "$logs/baseline.log" || { echo "FAIL: requested peak exceeds 1100 MiB" >&2; exit 1; }
