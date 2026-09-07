@@ -90,5 +90,9 @@ ENGINE_LINK_LIBS := $(ENGINE_SYSTEM_LIBS) $(LDLIBS)
 CONFIG := $(shell printf '%s\n' '$(CC)|$(shell $(CC) --version | head -1)|$(TARGET)|$(MODE)|$(CPPFLAGS)|$(CFLAGS)|$(LDFLAGS)|$(LDLIBS)|$(BACKENDS)|$(GEMM_PROVIDER)|$(LINK)|$(GEIST_REV)|$(ENGINE_PATCH_ID)|$(ENGINE_FLAGS)|$(AR)|$(RANLIB)|$(COMPILER_TARGET)|$(shell cksum Makefile mk/config.mk)' | cksum | cut -d' ' -f1)
 BUILD := build/$(TARGET)/$(MODE)/$(CONFIG)
 LIB := $(BUILD)/libgeist_memory.a
+ADAPTER_LIB := $(BUILD)/libgeist_memory_geist.a
 ENGINE_SRC := $(abspath build/engine-source/$(GEIST_REV)-$(ENGINE_PATCH_ID))
 ENGINE_LIB := $(abspath $(BUILD)/engine/libgeist.a)
+# Link order for static archives: core, then the embedder it calls, then geistlib.
+GEIST_LIBS := $(LIB) $(ADAPTER_LIB) $(ENGINE_LIB)
+PKG_CONFIG ?= pkg-config

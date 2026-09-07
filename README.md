@@ -28,16 +28,23 @@ make MODE=asan check fuzz
 
 # Provide an existing geistlib checkout containing the pinned revision.
 git clone https://github.com/geisten/geistlib ../geistlib
-make lib engine example
+make lib adapter engine example
 make print-config
 ```
 
 `GEISTLIB=/path/to/geistlib` selects the source repository. Make archives commit
 `32b432660948a50be05b355efa74a789456a37dd` into its own ignored build directory;
 it never changes the source checkout or downloads dependencies. `make lib`
-builds `libgeist_memory.a`; `make engine` builds `libgeist.a`. Artifacts live
-under `build/<target>/<mode>/<configuration>/`. Both archives are required
-when linking a consumer.
+builds `libgeist_memory.a` and needs no geistlib; `make adapter` builds
+`libgeist_memory_geist.a`, the geistlib embedder; `make engine` builds
+`libgeist.a`. Artifacts live under `build/<target>/<mode>/<configuration>/`.
+
+The core calls its embedder through the four functions declared in
+`include/geist_memory_embedder.h`; exactly one implementation is linked per
+binary. A consumer links `-lgeist_memory -lgeist_memory_geist -lgeist` in that
+order, or `-lgeist_memory` plus its own embedder objects. The installed
+`geist-memory-geist.pc` carries the bundled combination, `geist-memory.pc`
+the core alone.
 
 The default is `BACKENDS=cpu_scalar GEMM_PROVIDER=native LINK=system`.
 Optional `cpu_neon` and `cpu_x86` backends must be selected explicitly and need

@@ -1,6 +1,7 @@
 #ifndef GM_INTERNAL_H
 #define GM_INTERNAL_H
 #include "geist_memory.h"
+#include "geist_memory_embedder.h"
 #include <stdlib.h>
 #include <string.h>
 #if __has_include(<stdckdint.h>)
@@ -61,4 +62,7 @@ static inline void gm_put64(uint8_t *p, uint64_t x) {
     for (unsigned i = 0; i < 8; ++i)
         p[i] = (uint8_t)(x >> (8 * i));
 }
+/* Chunking policy; the model window itself is part of the embedder contract. */
+enum { GM_TOKENS = 65536, GM_OVERLAP = 64 };
+[[nodiscard]] enum gm_status gm_pack(size_t dim, const float *vector, uint8_t *bits);
 #endif

@@ -19,6 +19,11 @@
   API/ABI; rebuild consumers against the installed header and matching archives.
 - Pin geistlib, separate configuration artifacts, add Make test/link/install/fuzz/
   benchmark/package targets and a small CLI. No model weights are bundled.
+- Split the geistlib embedder out of the core archive. `libgeist_memory.a` has no
+  geistlib dependency; `libgeist_memory_geist.a` implements the now public
+  link-time contract `geist_memory_embedder.h`. Consumers link
+  `-lgeist_memory -lgeist_memory_geist -lgeist` (or `pkg-config geist-memory-geist`)
+  or the core plus their own embedder.
 
 - Introduce incompatible v2 serialization with explicit little-endian fields and
   SHA-256 for each header and record. Bind record checksums to kind, model, dimension

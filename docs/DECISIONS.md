@@ -1,8 +1,12 @@
 # Implementation decisions
 
 1. Keep one public header, an opaque handle and the original three-file store.
-   Search stays beside its representation. A private engine adapter isolates
-   tokenization/inference; tests replace it without a public plugin framework.
+   Search stays beside its representation. A public link-time embedder
+   contract (`geist_memory_embedder.h`, four functions) isolates
+   tokenization/inference; the geistlib adapter is its own archive and tests
+   link a mock instead. Exactly one embedder per binary, no runtime selection:
+   a vtable would be flexibility without a second in-process user. Generative
+   engines are the consumer's business, not this library's.
 2. Coordinate the three files with a bounded undo journal. Compaction uses the
    same journal and hard-link backups. This preserves the existing record
    structure, but costs more recovery logic than a single authoritative file.

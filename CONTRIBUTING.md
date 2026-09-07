@@ -1,8 +1,10 @@
 # Contributing
 
 Keep library behavior in `src/`; examples demonstrate the public header only.
-`gm_store.c` owns format, generation liveness and search. `gm_engine.c` is the
-only translation unit including geistlib headers. The platform module owns
+`gm_store.c` owns format, generation liveness and search. `embedder_geist.c`
+is the only translation unit including geistlib headers; it implements the
+public embedder contract using public headers only, so it doubles as the
+template for a consumer-provided embedder. The platform module owns
 exact I/O, sync helpers and bounded file reads.
 
 Use C23 `nullptr`, `bool`, `constexpr`, `static_assert` and `[[nodiscard]]` where

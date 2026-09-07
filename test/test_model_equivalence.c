@@ -1,5 +1,5 @@
 /* Exact before/after reference for the load-time context bound on one backend. */
-#include "gm_engine.h"
+#include "gm_internal.h"
 #include "test_support.h"
 #include <geist.h>
 #include <geist_util.h>

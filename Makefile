@@ -3,24 +3,33 @@ include mk/config.mk
 export ZERO_AR_DATE := 1
 
 CORE := src/gm.c src/gm_store.c src/gm_format.c src/gm_hash.c src/gm_platform.c
-SOURCES := $(CORE) src/gm_engine.c
-OBJECTS := $(SOURCES:src/%.c=$(BUILD)/%.o)
+ADAPTER := src/embedder_geist.c
+OBJECTS := $(CORE:src/%.c=$(BUILD)/%.o)
+ADAPTER_OBJECT := $(ADAPTER:src/%.c=$(BUILD)/%.o)
 TEST_OBJECTS := $(CORE:src/%.c=$(BUILD)/test/%.o)
-DEPS := $(OBJECTS:.o=.d) $(TEST_OBJECTS:.o=.d)
+DEPS := $(OBJECTS:.o=.d) $(ADAPTER_OBJECT:.o=.d) $(TEST_OBJECTS:.o=.d)
 
 .PHONY: all lib test test-unit test-store test-e2e check check-headers analyze \
-        engine check-engine help print-config clean install check-install check-linkage bench fuzz
+        engine check-engine adapter help print-config clean install check-install check-linkage bench fuzz
 all lib: $(LIB)
 $(LIB): $(OBJECTS)
 	$(AR) rcs $@ $(OBJECTS)
 	$(RANLIB) $@
 $(BUILD)/%.o: src/%.c Makefile mk/config.mk
 	@mkdir -p $(@D)
-	$(CC) $(CPPFLAGS) $(BASE_FLAGS) $(CFLAGS) -Iinclude -Isrc -I$(ENGINE_SRC)/include -MMD -MP -c $< -o $@
+	$(CC) $(CPPFLAGS) $(BASE_FLAGS) $(CFLAGS) -Iinclude -Isrc -MMD -MP -c $< -o $@
+# The adapter compiles like an external embedder: public headers and geistlib only.
+adapter: $(ADAPTER_LIB)
+$(ADAPTER_LIB): $(ADAPTER_OBJECT)
+	$(AR) rcs $@ $<
+	$(RANLIB) $@
+$(ADAPTER_OBJECT): $(ADAPTER) Makefile mk/config.mk | check-engine
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(BASE_FLAGS) $(CFLAGS) -Iinclude -I$(ENGINE_SRC)/include -MMD -MP -c $< -o $@
 $(BUILD)/test/%.o: src/%.c Makefile mk/config.mk
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(BASE_FLAGS) $(CFLAGS) -DGM_TESTING -Iinclude -Isrc -MMD -MP -c $< -o $@
-$(BUILD)/test_core: test/test_core.c test/mock_engine.c test/test_support.c $(TEST_OBJECTS)
+$(BUILD)/test_core: test/test_core.c test/mock_embedder.c test/test_support.c $(TEST_OBJECTS)
 	$(CC) $(CPPFLAGS) $(BASE_FLAGS) $(CFLAGS) -DGM_TESTING -Iinclude -Isrc -Itest $^ $(LDFLAGS) $(SAN_FLAGS) $(LINK_FLAGS) $(PROJECT_LIBS) -o $@
 test: test-unit test-store test-quality test-format test-import
 test-unit: $(BUILD)/test_core
@@ -34,6 +43,8 @@ check-headers:
 	@mkdir -p $(BUILD)
 	printf '#include "geist_memory.h"\nint main(void) { return 0; }\n' | $(CC) $(CPPFLAGS) $(BASE_FLAGS) $(CFLAGS) -Iinclude -x c - -o $(BUILD)/header-c $(SAN_FLAGS)
 	printf '#include "geist_memory.h"\nint main() { return 0; }\n' | $(CXX) -std=c++17 -Wall -Wextra -pedantic-errors -Iinclude -x c++ - -o $(BUILD)/header-cxx
+	printf '#include "geist_memory_embedder.h"\nint main(void) { return 0; }\n' | $(CC) $(CPPFLAGS) $(BASE_FLAGS) $(CFLAGS) -Iinclude -x c - -o $(BUILD)/embedder-c $(SAN_FLAGS)
+	printf '#include "geist_memory_embedder.h"\nint main() { return 0; }\n' | $(CXX) -std=c++17 -Wall -Wextra -pedantic-errors -Iinclude -x c++ - -o $(BUILD)/embedder-cxx
 analyze:
 	@mkdir -p $(BUILD)/analysis
 	@for source in $(CORE) test/quality.c test/bench_model.c; do $(CC) --analyze -Werror -std=c23 -D_POSIX_C_SOURCE=200809L -D_DARWIN_C_SOURCE -D_DEFAULT_SOURCE -Iinclude -Isrc -Itest -Xanalyzer -analyzer-werror -Xanalyzer -analyzer-output=text $$source -o $(BUILD)/analysis/$$(basename $$source).plist || exit; done
@@ -53,9 +64,8 @@ $(ENGINE_LIB): FORCE | check-engine
 	    BACKENDS='$(BACKENDS)' GEMM_PROVIDER=native CFLAGS_TARGET='$(ENGINE_FLAGS)' \
 	    EXTRA_CFLAGS='$(CPPFLAGS) $(CFLAGS)' LDFLAGS_TARGET= LDLIBS_TARGET=-lm BUILD_DIR='$(abspath $(BUILD)/engine/obj)' \
 	    LIB_DIR='$(abspath $(BUILD)/engine)' BIN_DIR='$(abspath $(BUILD)/engine/bin)'
-$(BUILD)/gm_engine.o: | check-engine
-$(BUILD)/test_gm_e2e: test/test_gm_e2e.c test/test_support.c $(LIB) $(ENGINE_LIB)
-	$(CC) $(CPPFLAGS) $(BASE_FLAGS) $(CFLAGS) -Iinclude -Isrc -Itest $< test/test_support.c $(LIB) $(ENGINE_LIB) $(LDFLAGS) $(SAN_FLAGS) $(LINK_FLAGS) $(ENGINE_LINK_LIBS) -o $@
+$(BUILD)/test_gm_e2e: test/test_gm_e2e.c test/test_support.c $(GEIST_LIBS)
+	$(CC) $(CPPFLAGS) $(BASE_FLAGS) $(CFLAGS) -Iinclude -Isrc -Itest $< test/test_support.c $(GEIST_LIBS) $(LDFLAGS) $(SAN_FLAGS) $(LINK_FLAGS) $(ENGINE_LINK_LIBS) -o $@
 test-e2e: check-model $(BUILD)/test_gm_e2e
 	GEIST_EMBED_GGUF_PATH='$(GEIST_EMBED_GGUF_PATH)' $(BUILD)/test_gm_e2e
 print-config:
@@ -63,7 +73,7 @@ print-config:
 help:
 	@printf '%s\n' 'make [lib]          static geist-memory archive' 'make check          model-free tests + C/C++ headers' \
 	 'make MODE=asan check ASan + UBSan tests' 'make analyze        Clang static analysis' \
-	 'make engine         pinned engine in isolated build directory' 'make test-e2e       requires GEIST_EMBED_GGUF_PATH' \
+	 'make adapter        geistlib embedder archive; make engine builds the pinned engine' 'make test-e2e       requires GEIST_EMBED_GGUF_PATH' \
 	 'make check-linkage check-install  external consumer and staged installation' \
 	 'make fuzz           deterministic corrupt-file tests (MODE=asan recommended)' \
 	 'make fuzz-libfuzzer coverage-guided Clang fuzzing' 'make bench          store latency and memory' 'make bench-model    real-model DE/EN quality and latency' \
@@ -78,35 +88,48 @@ clean:
 
 -include $(DEPS)
 
-$(BUILD)/consumer: test/test_consumer.c $(LIB) $(ENGINE_LIB)
-	$(CC) $(CPPFLAGS) $(BASE_FLAGS) $(CFLAGS) -Iinclude $< $(LIB) $(ENGINE_LIB) $(LDFLAGS) $(SAN_FLAGS) $(LINK_FLAGS) $(ENGINE_LINK_LIBS) -o $@
-$(BUILD)/memory: examples/memory.c $(LIB) $(ENGINE_LIB)
-	$(CC) $(CPPFLAGS) $(BASE_FLAGS) $(CFLAGS) -Iinclude $< $(LIB) $(ENGINE_LIB) $(LDFLAGS) $(SAN_FLAGS) $(LINK_FLAGS) $(ENGINE_LINK_LIBS) -o $@
+$(BUILD)/consumer: test/test_consumer.c $(GEIST_LIBS)
+	$(CC) $(CPPFLAGS) $(BASE_FLAGS) $(CFLAGS) -Iinclude $< $(GEIST_LIBS) $(LDFLAGS) $(SAN_FLAGS) $(LINK_FLAGS) $(ENGINE_LINK_LIBS) -o $@
+$(BUILD)/memory: examples/memory.c $(GEIST_LIBS)
+	$(CC) $(CPPFLAGS) $(BASE_FLAGS) $(CFLAGS) -Iinclude $< $(GEIST_LIBS) $(LDFLAGS) $(SAN_FLAGS) $(LINK_FLAGS) $(ENGINE_LINK_LIBS) -o $@
 .PHONY: example
 example: $(BUILD)/memory
-install: $(LIB) $(ENGINE_LIB)
+install: $(GEIST_LIBS)
 	install -d '$(DESTDIR)$(PREFIX)/include' '$(DESTDIR)$(PREFIX)/lib/pkgconfig' '$(DESTDIR)$(PREFIX)/share/doc/geist-memory/docs' '$(DESTDIR)$(PREFIX)/share/doc/geist-memory/patches'
 	install -m 644 LICENSE README.md PLAN.md CHANGELOG.md CONTRIBUTING.md '$(DESTDIR)$(PREFIX)/share/doc/geist-memory/'
 	install -m 644 docs/*.md '$(DESTDIR)$(PREFIX)/share/doc/geist-memory/docs/'
 	install -m 644 patches/*.patch patches/*.md '$(DESTDIR)$(PREFIX)/share/doc/geist-memory/patches/'
 	install -m 644 $(ENGINE_SRC)/LICENSE '$(DESTDIR)$(PREFIX)/share/doc/geist-memory/GEIST-LICENSE'
 	install -m 644 $(ENGINE_SRC)/NOTICE '$(DESTDIR)$(PREFIX)/share/doc/geist-memory/GEIST-NOTICE'
-	install -m 644 include/geist_memory.h '$(DESTDIR)$(PREFIX)/include/'
-	install -m 644 $(LIB) $(ENGINE_LIB) '$(DESTDIR)$(PREFIX)/lib/'
+	install -m 644 include/geist_memory.h include/geist_memory_embedder.h '$(DESTDIR)$(PREFIX)/include/'
+	install -m 644 $(GEIST_LIBS) '$(DESTDIR)$(PREFIX)/lib/'
 	printf '%s\n' 'prefix=$(PREFIX)' 'libdir=$${prefix}/lib' 'includedir=$${prefix}/include' \
-	    '' 'Name: geist-memory' 'Description: local semantic memory in C23' 'Version: 0.1.0' \
-	    'Libs: -L$${libdir} -lgeist_memory' 'Libs.private: -lgeist $(ENGINE_SYSTEM_LIBS)' 'Cflags: -I$${includedir}' \
+	    '' 'Name: geist-memory' 'Description: local semantic memory in C23; link an embedder' 'Version: 0.1.0' \
+	    'Libs: -L$${libdir} -lgeist_memory' 'Libs.private: -lm' 'Cflags: -I$${includedir}' \
 	    > '$(DESTDIR)$(PREFIX)/lib/pkgconfig/geist-memory.pc'
-check-install: $(LIB) $(ENGINE_LIB)
+	printf '%s\n' 'prefix=$(PREFIX)' 'libdir=$${prefix}/lib' 'includedir=$${prefix}/include' \
+	    '' 'Name: geist-memory-geist' 'Description: geist-memory with the bundled geistlib embedder' 'Version: 0.1.0' \
+	    'Libs: -L$${libdir} -lgeist_memory -lgeist_memory_geist' 'Libs.private: -lgeist $(ENGINE_SYSTEM_LIBS)' 'Cflags: -I$${includedir}' \
+	    > '$(DESTDIR)$(PREFIX)/lib/pkgconfig/geist-memory-geist.pc'
+# The staged consumer links through the installed .pc; that also checks its archive order.
+check-install: $(GEIST_LIBS)
 	$(MAKE) install PREFIX=/usr DESTDIR='$(abspath $(BUILD)/stage)'
-	$(CC) $(CPPFLAGS) $(BASE_FLAGS) $(CFLAGS) -I$(BUILD)/stage/usr/include test/test_consumer.c \
-	    $(BUILD)/stage/usr/lib/libgeist_memory.a $(BUILD)/stage/usr/lib/libgeist.a \
-	    $(LDFLAGS) $(SAN_FLAGS) $(LINK_FLAGS) $(ENGINE_LINK_LIBS) -o $(BUILD)/installed-consumer
+	$(CC) $(CPPFLAGS) $(BASE_FLAGS) $(CFLAGS) test/test_consumer.c \
+	    $$(PKG_CONFIG_SYSROOT_DIR='$(abspath $(BUILD)/stage)' PKG_CONFIG_LIBDIR='$(abspath $(BUILD)/stage)/usr/lib/pkgconfig' \
+	       $(PKG_CONFIG) --static --cflags --libs geist-memory-geist) \
+	    $(LDFLAGS) $(SAN_FLAGS) $(LINK_FLAGS) $(LDLIBS) -o $(BUILD)/installed-consumer
 	$(BUILD)/installed-consumer
-check-linkage: $(BUILD)/consumer
+# Core without geistlib: no geist_ reference, and complete with a foreign embedder.
+# Adapter: no core reference, so the archive order core, adapter, engine has no cycle.
+check-linkage: $(BUILD)/consumer $(BUILD)/consumer-mock
 	$(BUILD)/consumer
+	$(BUILD)/consumer-mock
 	sh tools/check-linkage.sh $(BUILD)/consumer $(LINK)
 	sh test/test_linkage.sh
+	nm -u $(LIB) > $(BUILD)/core-undefined && ! grep -E '(^|[[:space:]])_?geist_' $(BUILD)/core-undefined
+	nm -u $(ADAPTER_LIB) > $(BUILD)/adapter-undefined && ! grep -E '(^|[[:space:]])_?gm_' $(BUILD)/adapter-undefined
+$(BUILD)/consumer-mock: test/test_consumer.c test/mock_embedder.c test/test_support.c $(LIB)
+	$(CC) $(CPPFLAGS) $(BASE_FLAGS) $(CFLAGS) -DGM_TESTING -Iinclude -Isrc -Itest $^ $(LDFLAGS) $(SAN_FLAGS) $(LINK_FLAGS) $(PROJECT_LIBS) -o $@
 
 FUZZ_RUNS ?= 3000
 FUZZ_SECONDS ?= 30
@@ -140,7 +163,7 @@ release-check: import-tool check format-check check-linkage check-install check-
 
 # Packaging creates a reviewable local artifact; it does not publish a release.
 .PHONY: dist
-dist: $(LIB) $(ENGINE_LIB)
+dist: $(GEIST_LIBS)
 	@set -eu; stage=$$(mktemp -d '$(abspath $(BUILD))/package.XXXXXX'); \
 	trap 'rm -rf "$$stage"' EXIT HUP INT TERM; \
 	$(MAKE) install PREFIX=/usr DESTDIR="$$stage" && \
@@ -158,10 +181,10 @@ check-repro:
 $(BUILD)/test-quality: test/test_quality.c test/quality.c test/quality.h test/test_support.h
 	@mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(BASE_FLAGS) $(CFLAGS) -Iinclude -Isrc -Itest test/test_quality.c test/quality.c $(LDFLAGS) $(SAN_FLAGS) $(LINK_FLAGS) $(PROJECT_LIBS) -o $@
-$(BUILD)/bench-model: test/bench_model.c test/quality.c test/quality.h test/retrieval_cases.h $(LIB) $(ENGINE_LIB)
-	$(CC) $(CPPFLAGS) $(BASE_FLAGS) $(CFLAGS) -Iinclude -Isrc -Itest test/bench_model.c test/quality.c $(LIB) $(ENGINE_LIB) $(LDFLAGS) $(SAN_FLAGS) $(LINK_FLAGS) $(ENGINE_LINK_LIBS) -o $@
-$(BUILD)/bench-model-mock: test/bench_model.c test/quality.c test/quality.h test/retrieval_cases.h test/mock_engine.c test/test_support.c $(TEST_OBJECTS)
-	$(CC) $(CPPFLAGS) $(BASE_FLAGS) $(CFLAGS) -DGM_TESTING -DGM_MODEL_MOCK -Iinclude -Isrc -Itest test/bench_model.c test/quality.c test/mock_engine.c test/test_support.c $(TEST_OBJECTS) $(LDFLAGS) $(SAN_FLAGS) $(LINK_FLAGS) $(PROJECT_LIBS) -o $@
+$(BUILD)/bench-model: test/bench_model.c test/quality.c test/quality.h test/retrieval_cases.h $(GEIST_LIBS)
+	$(CC) $(CPPFLAGS) $(BASE_FLAGS) $(CFLAGS) -Iinclude -Isrc -Itest test/bench_model.c test/quality.c $(GEIST_LIBS) $(LDFLAGS) $(SAN_FLAGS) $(LINK_FLAGS) $(ENGINE_LINK_LIBS) -o $@
+$(BUILD)/bench-model-mock: test/bench_model.c test/quality.c test/quality.h test/retrieval_cases.h test/mock_embedder.c test/test_support.c $(TEST_OBJECTS)
+	$(CC) $(CPPFLAGS) $(BASE_FLAGS) $(CFLAGS) -DGM_TESTING -DGM_MODEL_MOCK -Iinclude -Isrc -Itest test/bench_model.c test/quality.c test/mock_embedder.c test/test_support.c $(TEST_OBJECTS) $(LDFLAGS) $(SAN_FLAGS) $(LINK_FLAGS) $(PROJECT_LIBS) -o $@
 test-quality: $(BUILD)/test-quality $(BUILD)/bench-model-mock
 	$(BUILD)/test-quality
 	@printf 'model harness fixture\n' > $(BUILD)/model-fixture
@@ -181,8 +204,8 @@ check-package:
 	sh test/test_package.sh
 
 .PHONY: import-tool
-$(BUILD)/memory-import-v1: examples/import_v1.c $(LIB) $(ENGINE_LIB)
-	$(CC) $(CPPFLAGS) $(BASE_FLAGS) $(CFLAGS) -Iinclude $< $(LIB) $(ENGINE_LIB) $(LDFLAGS) $(SAN_FLAGS) $(LINK_FLAGS) $(ENGINE_LINK_LIBS) -o $@
+$(BUILD)/memory-import-v1: examples/import_v1.c $(GEIST_LIBS)
+	$(CC) $(CPPFLAGS) $(BASE_FLAGS) $(CFLAGS) -Iinclude $< $(GEIST_LIBS) $(LDFLAGS) $(SAN_FLAGS) $(LINK_FLAGS) $(ENGINE_LINK_LIBS) -o $@
 import-tool: $(BUILD)/memory-import-v1
 
 .PHONY: test-format
@@ -220,8 +243,8 @@ QUALITY_HEADER ?= build/quality/scifact.h
 bench-model-large: check-model $(BUILD)/bench-model-large
 	@$(MAKE) --no-print-directory print-config
 	GM_TRUNCATE=1 GM_OMIT_BOS=1 GM_OMIT_EOS=0 GEIST_EMBED_GGUF_PATH='$(GEIST_EMBED_GGUF_PATH)' $(BUILD)/bench-model-large
-$(BUILD)/bench-model-large: test/bench_model.c test/quality.c test/quality.h $(QUALITY_HEADER) $(LIB) $(ENGINE_LIB)
-	$(CC) $(CPPFLAGS) $(BASE_FLAGS) $(CFLAGS) -DGM_RETRIEVAL_HEADER='"$(abspath $(QUALITY_HEADER))"' -Iinclude -Isrc -Itest test/bench_model.c test/quality.c $(LIB) $(ENGINE_LIB) $(LDFLAGS) $(SAN_FLAGS) $(LINK_FLAGS) $(ENGINE_LINK_LIBS) -o $@
+$(BUILD)/bench-model-large: test/bench_model.c test/quality.c test/quality.h $(QUALITY_HEADER) $(GEIST_LIBS)
+	$(CC) $(CPPFLAGS) $(BASE_FLAGS) $(CFLAGS) -DGM_RETRIEVAL_HEADER='"$(abspath $(QUALITY_HEADER))"' -Iinclude -Isrc -Itest test/bench_model.c test/quality.c $(GEIST_LIBS) $(LDFLAGS) $(SAN_FLAGS) $(LINK_FLAGS) $(ENGINE_LINK_LIBS) -o $@
 
 # GNU ld test instrumentation; production objects and allocator remain unchanged.
 WRAP_ALLOC := malloc calloc realloc aligned_alloc posix_memalign strdup free
@@ -232,8 +255,8 @@ model-memory: check-model $(if $(findstring linux,$(COMPILER_TARGET)),$(BUILD)/t
 FAULT_PHASE ?= none
 FAULT_AT ?= -1
 FAULT_MIN ?= 0
-$(BUILD)/test-model-memory: test/test_model_memory.c test/model_alloc.c test/model_alloc.h test/test_support.c $(LIB) $(ENGINE_LIB)
-	$(CC) $(CPPFLAGS) $(BASE_FLAGS) $(CFLAGS) -Iinclude -Isrc -Itest test/test_model_memory.c test/model_alloc.c test/test_support.c $(LIB) $(ENGINE_LIB) $(foreach name,$(WRAP_ALLOC),-Wl,--wrap=$(name)) $(LDFLAGS) $(SAN_FLAGS) $(ENGINE_LINK_LIBS) -o $@
+$(BUILD)/test-model-memory: test/test_model_memory.c test/model_alloc.c test/model_alloc.h test/test_support.c $(GEIST_LIBS)
+	$(CC) $(CPPFLAGS) $(BASE_FLAGS) $(CFLAGS) -Iinclude -Isrc -Itest test/test_model_memory.c test/model_alloc.c test/test_support.c $(GEIST_LIBS) $(foreach name,$(WRAP_ALLOC),-Wl,--wrap=$(name)) $(LDFLAGS) $(SAN_FLAGS) $(ENGINE_LINK_LIBS) -o $@
 .PHONY: test-model-alloc
 test-model-alloc: $(BUILD)/test-model-alloc
 	$(BUILD)/test-model-alloc

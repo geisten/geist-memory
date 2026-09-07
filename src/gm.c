@@ -2,7 +2,6 @@
 
 #include "gm_store.h"
 
-#include "gm_engine.h"
 #include "gm_hash.h"
 #include "gm_internal.h"
 #include "gm_platform.h"
@@ -22,7 +21,7 @@ static constexpr size_t GM_MAX_DOC_BYTES = GM_TEXT_MAX;
 
 struct gm {
     struct gm_store *store;
-    struct gm_engine *engine;
+    struct gm_embedder *engine;
     char query_prefix[128];
 
     size_t dim;    /* embedding width in bits, = the store's */
@@ -76,7 +75,7 @@ enum gm_status gm_pack(size_t dim, const float *v, uint8_t *out) {
 /* The adapter applies the explicit BOS/EOS policy selected at open. */
 static enum gm_status embed_window(struct gm *m, size_t n, const int32_t *ids) {
     const float *vector = nullptr;
-    enum gm_status s = gm_engine_embed(m->engine, n, ids, m->dim, &vector);
+    enum gm_status s = gm_embedder_embed(m->engine, n, ids, m->dim, &vector);
     return s == GM_OK ? gm_pack(m->dim, vector, m->bits) : s;
 }
 
@@ -102,7 +101,7 @@ static enum gm_status index_text(struct gm *m, const char *id, const char *text,
         memcpy(terminated, text, len);
     terminated[len] = 0;
     size_t n_ids = 0;
-    s = gm_engine_tokenize(m->engine, terminated, GM_MAX_DOC_TOKENS + 1u, m->ids, &n_ids);
+    s = gm_embedder_tokenize(m->engine, terminated, GM_MAX_DOC_TOKENS + 1u, m->ids, &n_ids);
     free(terminated);
     if (s != GM_OK)
         return s;
@@ -149,7 +148,7 @@ enum gm_status gm_open(const char *dir, const char *model_path, const struct gm_
         return GM_E_OOM;
     strcpy(m->query_prefix, prefix);
     const bool omit_bos = opts && opts->omit_bos, omit_eos = opts && opts->omit_eos;
-    s = gm_engine_open(model_path, omit_bos, omit_eos, &m->engine, &m->dim);
+    s = gm_embedder_open(model_path, omit_bos, omit_eos, &m->engine, &m->dim);
     if (s != GM_OK)
         goto fail;
     if (!m->dim || m->dim % 8u || m->dim > GM_DIM_MAX) {
@@ -188,7 +187,7 @@ void gm_close(struct gm *m) {
         return;
     }
     gm_store_close(m->store);
-    gm_engine_close(m->engine);
+    gm_embedder_close(m->engine);
     free(m->bits);
     free(m->ids);
     free(m);
@@ -237,7 +236,7 @@ enum gm_status gm_recall(struct gm *m, size_t k, const char *query, struct gm_hi
     memcpy(buf, m->query_prefix, prefix);
     memcpy(buf + prefix, query, len + 1u);
     size_t n_ids = 0;
-    s = gm_engine_tokenize(m->engine, buf, GM_WINDOW + 1u, m->ids, &n_ids);
+    s = gm_embedder_tokenize(m->engine, buf, GM_WINDOW + 1u, m->ids, &n_ids);
     if (s != GM_OK)
         return s;
     if (n_ids > GM_WINDOW)

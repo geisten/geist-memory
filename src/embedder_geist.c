@@ -1,8 +1,11 @@
-#include "gm_engine.h"
-#include "gm_internal.h"
+/* geistlib adapter for the embedder contract. Only public headers: this file
+ * is the template for a consumer-provided embedder. */
+#include "geist_memory_embedder.h"
+#include <stdlib.h>
+#include <string.h>
 #include <geist.h>
 #include <geist_util.h>
-struct gm_engine {
+struct gm_embedder {
     struct geist_backend *backend;
     struct geist_model *model;
     struct geist_session *session;
@@ -11,7 +14,7 @@ struct gm_engine {
 static enum gm_status status(enum geist_status s) {
     return s == GEIST_OK ? GM_OK : s == GEIST_E_OOM ? GM_E_OOM : GM_E_ENGINE;
 }
-void gm_engine_close(struct gm_engine *e) {
+void gm_embedder_close(struct gm_embedder *e) {
     if (!e)
         return;
     if (e->session)
@@ -22,16 +25,16 @@ void gm_engine_close(struct gm_engine *e) {
         geist_backend_destroy(e->backend);
     free(e);
 }
-enum gm_status gm_engine_tokenize(struct gm_engine *e, const char *text, size_t capacity,
-                                  int32_t *ids, size_t *n) {
+enum gm_status gm_embedder_tokenize(struct gm_embedder *e, const char *text, size_t capacity,
+                                    int32_t *ids, size_t *n) {
     *n = 0;
     enum geist_status s = geist_session_tokenize(e->session, text, capacity, ids, n);
     /* Some engine tokenizer paths report a full buffer without distinguishing
      * truncation. Callers provide limit+1 slots and reject the extra token. */
     return s == GEIST_E_INVALID_ARG ? GM_E_TOO_LONG : status(s);
 }
-enum gm_status gm_engine_embed(struct gm_engine *e, size_t n, const int32_t *ids, size_t dim,
-                               const float **out) {
+enum gm_status gm_embedder_embed(struct gm_embedder *e, size_t n, const int32_t *ids, size_t dim,
+                                 const float **out) {
     *out = nullptr;
     if (!n || n > GM_WINDOW)
         return GM_E_INVALID_ARG;
@@ -56,11 +59,11 @@ enum gm_status gm_engine_embed(struct gm_engine *e, size_t n, const int32_t *ids
     *out = v;
     return GM_OK;
 }
-enum gm_status gm_engine_open(const char *path, bool omit_bos, bool omit_eos,
-                              struct gm_engine **out, size_t *dim) {
+enum gm_status gm_embedder_open(const char *path, bool omit_bos, bool omit_eos,
+                                struct gm_embedder **out, size_t *dim) {
     *out = nullptr;
     *dim = 0;
-    struct gm_engine *e = gm_zero(sizeof *e);
+    struct gm_embedder *e = calloc(1, sizeof *e);
     if (!e)
         return GM_E_OOM;
     e->omit_bos = omit_bos;
@@ -73,20 +76,20 @@ enum gm_status gm_engine_open(const char *path, bool omit_bos, bool omit_eos,
         s = geist_session_create(e->model, e->backend, &opts, &e->session);
     if (s != GEIST_OK) {
         enum gm_status result = status(s);
-        gm_engine_close(e);
+        gm_embedder_close(e);
         return result;
     }
     int32_t ids[GM_WINDOW + 1];
     size_t n = 0;
-    enum gm_status result = gm_engine_tokenize(e, "probe", GM_WINDOW + 1, ids, &n);
+    enum gm_status result = gm_embedder_tokenize(e, "probe", GM_WINDOW + 1, ids, &n);
     if (result != GM_OK || !n || n > GM_WINDOW) {
-        gm_engine_close(e);
+        gm_embedder_close(e);
         return result == GM_OK ? GM_E_ENGINE : result;
     }
     s = geist_session_prefill_tokens(e->session, n, ids);
     if (s != GEIST_OK || !geist_session_peek_embedding(dim, e->session) || !*dim || *dim % 8 ||
         *dim > GM_DIM_MAX) {
-        gm_engine_close(e);
+        gm_embedder_close(e);
         *dim = 0;
         return s == GEIST_E_OOM ? GM_E_OOM : GM_E_ENGINE;
     }

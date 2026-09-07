@@ -75,7 +75,7 @@ jobs:
           path: build/geistlib
       - run: >-
           docker run --rm --tmpfs /enospc:size=32m -v "$PWD:/work" -w /work alpine:3.22
-          sh -ec 'apk add --no-cache build-base clang git binutils tar gzip linux-headers;
+          sh -ec 'apk add --no-cache build-base clang git binutils tar gzip linux-headers pkgconf;
           git config --global --add safe.directory /work/build/geistlib;
           make -j2 CC=clang LINK=static GEISTLIB=build/geistlib
           check check-linkage check-install example model-tools import-tool check-package test-enospc ENOSPC_DIR=/enospc'

@@ -1,5 +1,5 @@
 #define _POSIX_C_SOURCE 200809L
-#include "gm_engine.h"
+#include "gm_internal.h"
 #include "gm_hash.h"
 #include "gm_platform.h"
 #include "gm_store.h"

@@ -275,6 +275,11 @@ prüfbaren Zwischenstand; die jeweils nächste baut auf dessen Garantien auf.
 - [x] Ein `check-linkage`-Target untersucht echte Consumer-Binaries: Linux mittels
   ELF-Metadaten, macOS mittels Mach-O-Abhängigkeiten. Ein `.a` allein belegt keine
   vollständig statische Anwendung.
+- [x] Kern und Engine-Adapter sind getrennte Archive. `libgeist_memory.a` enthält
+  kein geistlib-Symbol und baut ohne Engine-Quelle; `libgeist_memory_geist.a`
+  implementiert den öffentlichen Embedder-Vertrag `geist_memory_embedder.h`.
+  `check-linkage` linkt den Kern mit einem Mock-Embedder ohne geistlib und prüft
+  die undefinierten Symbole beider Archive.
 - [x] Release-Artefakte mit Buildmanifest, Engine-Revision, Toolchain, Prüfsummen und
   Lizenzhinweisen erzeugen. Reproduzierbarkeit in zwei getrennten Buildpfaden
   nachweisen; verbleibende Unterschiede dokumentieren.
@@ -283,7 +288,7 @@ prüfbaren Zwischenstand; die jeweils nächste baut auf dessen Garantien auf.
 
 | Target | Bedeutung |
 | --- | --- |
-| `all` / `lib`, `engine` | Eigenes statisches Archiv bzw. Engine-Archiv bauen |
+| `all` / `lib`, `adapter`, `engine` | Kern-Archiv, geistlib-Embedder bzw. Engine-Archiv bauen |
 | `help`, `print-config` | Bedienung und aufgelöste Konfiguration anzeigen |
 | `test`, `test-unit`, `test-store` | Modellunabhängige Pflichtprüfungen |
 | `test-enospc`, `prepare-model` | Echte Platzmangelfälle auf Testdateisystem bzw. SHA-gebundene Modellvorbereitung |

@@ -1,5 +1,5 @@
 #define _POSIX_C_SOURCE 200809L
-#include "gm_engine.h"
+#include "gm_internal.h"
 #include "gm_platform.h"
 #include "quality.h"
 #include <stdio.h>
@@ -29,17 +29,17 @@ static int compare_time(const void *a, const void *b) {
     double x = *(const double *)a, y = *(const double *)b;
     return (x > y) - (x < y);
 }
-static enum gm_status embed(struct gm_engine *engine, size_t dim, const char *text,
+static enum gm_status embed(struct gm_embedder *engine, size_t dim, const char *text,
                             const float **vector, size_t *tokens) {
     static int32_t ids[GM_TOKENS + 1];
-    enum gm_status s = gm_engine_tokenize(engine, text, GM_TOKENS + 1, ids, tokens);
+    enum gm_status s = gm_embedder_tokenize(engine, text, GM_TOKENS + 1, ids, tokens);
     if (s != GM_OK)
         return s;
     if (*tokens > GM_TOKENS || (*tokens > GM_WINDOW && !truncate_inputs))
         return GM_E_TOO_LONG;
     if (*tokens > GM_WINDOW)
         ++truncated_inputs;
-    return gm_engine_embed(engine, *tokens > GM_WINDOW ? GM_WINDOW : *tokens, ids, dim, vector);
+    return gm_embedder_embed(engine, *tokens > GM_WINDOW ? GM_WINDOW : *tokens, ids, dim, vector);
 }
 struct metrics {
     size_t queries, float_at_1, float_at_3, binary_at_1, binary_at_3;
@@ -84,7 +84,7 @@ int main(void) {
         return 2;
     }
     bool omit_bos = bos && !strcmp(bos, "1"), omit_eos = eos && !strcmp(eos, "1");
-    struct gm_engine *engine = nullptr;
+    struct gm_embedder *engine = nullptr;
     float *documents = nullptr;
     uint8_t digest[32];
     double start = now();
@@ -94,7 +94,7 @@ int main(void) {
         goto done;
     size_t dim = 0;
     start = now();
-    s = gm_engine_open(path, omit_bos, omit_eos, &engine, &dim);
+    s = gm_embedder_open(path, omit_bos, omit_eos, &engine, &dim);
     double open_s = now() - start;
     if (s != GM_OK)
         goto done;
@@ -193,7 +193,7 @@ int main(void) {
            times[(queries - 1) / 2] * 1000, times[(queries * 95 + 99) / 100 - 1] * 1000, rss_mib);
 done:
     free(documents);
-    gm_engine_close(engine);
+    gm_embedder_close(engine);
     if (s != GM_OK)
         fprintf(stderr, "model benchmark failed: %s\n", gm_status_str(s));
     return s == GM_OK ? 0 : 1;
