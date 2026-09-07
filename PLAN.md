@@ -222,8 +222,11 @@ prüfbaren Zwischenstand; die jeweils nächste baut auf dessen Garantien auf.
   Grenzen der Simulation gegenüber echten Stromausfällen dokumentieren.
 - [x] Reale ENOSPC-Dateisystemtests auf separatem HFS+-Abbild und Linux-tmpfs:
   Anlage, Journal, partielle Appends, Kompaktierung, Recovery und Wiederholen.
-- [ ] Fehler an den übrigen Kerneloperationen einschließlich Engine-Allokationen
-  bei echtem Modell systematisch injizieren.
+- [x] Echte Tokenizer-Allokationen in GPT-2/Qwen2/SPM/Unigram injizieren: 40 Fehler,
+  vollständiges Cleanup und identische Wiederholungen. Stilles Weglassen von Text
+  bei Scratch-OOM im versionierten Engine-Patch korrigieren.
+- [ ] Fehler an den übrigen Kerneloperationen und sämtliche Startup-Allokationen
+  einschließlich Kombinationen und weiterer Modellfamilien injizieren.
 - [x] Echte Modelltests separat halten. Die bisherige Re-Indexierungsprüfung ersetzen:
   alte Chunk-Generationen müssen tatsächlich ausgeschlossen werden.
 - [x] `make test` führt modellunabhängige Core-/Store-/Format-/Import-/Auswertungstests aus; `make check` ergänzt Header-Prüfungen.
@@ -330,8 +333,15 @@ prüfbaren Zwischenstand; die jeweils nächste baut auf dessen Garantien auf.
   Wiederöffnen auf macOS und Pi5 prüfen.
 - [x] Vollständigen Pi5-Modelltest mit ASan/UBSan und explizitem LeakSanitizer
   abnehmen; reproduziertes Engine-Leck (512 Bytes) im versionierten Patch beheben.
-- [ ] Allokationsspitzen und Fehlereinbringung der vollständigen Modellanwendung
-  systematisch auf Zielhardware abnehmen.
+- [x] Allokationsspitzen der vollständigen Modellanwendung auf Pi5 messen und
+  unnötige Modell-Kontextpuffer begrenzen: Peak -31,6 %, RSS -62,1 %; exakte
+  Float-Embeddings auf Pi und macOS einschließlich voller Fenster unverändert.
+- [x] 51 vollständige Modell-Fehlerfälle plus zwei Baselines prüfen: sämtliche
+  gemessenen Remember-/Recall-/Compact-Allokationen, alle sechs Startup-
+  Allokationen >=8 MiB und 24 weitere Startup-Stellen. Cleanup, Dateigleichheit,
+  Wiederholung und persistierte Ergebnisse prüfen; Grenzen in MODEL_MEMORY.md.
+- [ ] Alle 1065 Startup-Allokationen, größere/abweichende Anwendungspfade und
+  kombinierte Fehler über die begrenzte Nightly-Stichprobe hinaus abnehmen.
 - [x] Den reinen Suchscan getrennt von Tokenisierung und Modellinferenz messen.
   Die eigene allokationsfreie Suchschleife ist keine Zusage für den ganzen Recall-Aufruf.
 - [x] Reproduzierbare Korpora mit kleinen Stores und beispielsweise 100.000 sowie
@@ -341,9 +351,17 @@ prüfbaren Zwischenstand; die jeweils nächste baut auf dessen Garantien auf.
   Übereinstimmung, insgesamt und pro Abfragesprache. Auswertung unabhängig testen.
 - [x] Kleinen Korpus mit echtem Modell ausführen und Ergebnisse in MODEL_BENCHMARK.md
   veröffentlichen, einschließlich Präfix, Chunking, Backend und Modell-Hashes.
-- [ ] Repräsentativen größeren Korpus und Qualitätsgrenzen wählen; der kleine Testkorpus
-  genügt nicht als allgemeiner Qualitätsnachweis. Numerische Referenzgleichheit
-  der Engine gegen Microsoft ist durch diese Abnahme ebenfalls nicht bewiesen.
+- [x] Größeren externen, SHA-fixierten SciFact-Teilbestand mit 256 Dokumenten und
+  100 Fragen sowie vorab gesetzten Regressionsgrenzen messen: Pi Float/Binär
+  Recall@3 94/92 %, macOS 95/95 %. Auswahl, Abschneiden und Grenzen dokumentieren.
+- [x] Separaten Make-orchestrierten Modell-Nightly definieren: Qualität,
+  Allokationspeak, Fehlereinbringung, exakter Embedding-Vergleich und Sanitizer;
+  Reports als Artefakte behalten, Modelldownload vom normalen Build trennen.
+- [ ] Nightly nach Übernahme des Workflows auf `main` aktivieren und ersten
+  planmäßigen GitHub-Lauf abnehmen; der Abnahmebranch allein aktiviert ihn nicht.
+- [ ] Repräsentative mehrsprachige und anwendungsspezifische Qualitätsabnahme
+  abschließen. Der verkleinerte englische SciFact-Korpus ersetzt weder diese
+  Abnahme noch die numerische Engine-Referenzprüfung gegen Microsoft.
 - [x] Erst danach über SIMD, mmap, alternative Top-k-Verfahren oder ANN entscheiden.
   Jede Optimierung benötigt Referenzvergleich und Messung auf Zielhardware.
 

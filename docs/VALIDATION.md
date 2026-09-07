@@ -5,7 +5,7 @@ in the sandbox. Engine revision: `32b432660948a50be05b355efa74a789456a37dd`;
 Reference backend `cpu_scalar`, native GEMM, no OpenMP. The subsequent Pi model
 run explicitly selects `cpu_neon`. The engine now includes the checksum-bound
 compatibility patch documented in patches/README.md. The final patch SHA-256 is
-`1ee2d5707cf841420f4635b8b8c2dd78fdba52c76cbd1915403935313b318b74`.
+`be7906dd54c7e86a57d2c1c840cd746ac6b51a62b1448f67f56efcb69815a1c2`.
 Results refer to the current unreleased implementation, not to a released platform support promise.
 
 ## Completed locally
@@ -227,3 +227,45 @@ packages. Both macOS architectures now have native baseline evidence.
 The GitHub jobs compile the real engine and model executables but do not run
 model inference. Inference evidence remains limited to the measured macOS ARM64
 and Pi5 backends; an untested optional backend is not covered by these results.
+
+
+## Larger real-model quality and memory acceptance, 2026-09-07
+
+The SHA-pinned SciFact subset contains 256 documents and 100 English queries;
+181 documents are clipped to the first 256 content tokens. Both independently
+executed runs pass the preselected quality floors: Pi5 float/binary Recall@3
+94/92%, macOS ARM64 95/95%. These are subset measurements, not full BEIR scores.
+See [model benchmark](MODEL_BENCHMARK.md) for selection, licenses, all ranking
+metrics, token counts and timing limitations.
+
+Matched Pi measurements reduce the full-application requested peak from
+1461363361 to 999575201 bytes (-31.6%) and peak RSS from 726656 to 275040 KiB
+(-62.1%). Passing the 258-token bound at model creation removes unused default
+4096-token context buffers. Exact finite float-component comparisons for a
+short document, prefixed query and full token window pass against legacy loading
+on Pi and macOS ARM64; no Microsoft-reference equivalence is implied.
+
+A stronger full-application fault test exposed silent tokenizer text loss on
+scratch OOM (replacement fault 3). The compatibility patch now propagates
+failure and clears the output count. The small real-tokenizer regression passes
+40 allocation failures across GPT-2/Qwen2/SPM/Unigram with exact retry results.
+See [full-model memory acceptance](MODEL_MEMORY.md) for instrumentation limits.
+
+Local checks pass: core/format/store/import/quality tests, C/C++ headers, static
+analysis, formatting, package verification and two fresh byte-identical packages.
+The optional Python tools pass valid/invalid report and source-hash checks; the
+SciFact fixture is byte-identical across two generations.
+
+The new `model-nightly.yml` is defined for 02:23 UTC on Linux ARM64 and includes
+quality floors, an 1100-MiB requested-peak guard, bounded fault sweeps, exact
+embedding comparison and ASan/UBSan/LeakSanitizer. Artifacts retain reports and
+selection IDs for 30 days. **The nightly is not active on the acceptance branch**;
+GitHub requires the workflow on `main`. No default-branch merge was performed.
+
+The strengthened full-model sweep passes all 51 injected fault processes plus
+two baselines, with zero tracked live bytes after each close. Every measured
+replacement/recall/compaction allocation is covered, as are all six >=8-MiB
+startup allocations and 24 sampled startup sites (1065 total startup calls).
+This is bounded coverage, not exhaustive startup/kernel fault acceptance.
+Pi Clang 19 ASan/UBSan/LeakSanitizer passes the corrected tokenizer regression,
+full-model lifetime and E2E, plus all six large startup allocation failures.

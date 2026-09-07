@@ -50,3 +50,13 @@
 
 Representative quality and numerical-reference acceptance remain outstanding;
 see docs/VALIDATION.md for exact coverage and the remaining release gates.
+
+- Bound model-owned context buffers at load time as well as session creation:
+  measured Pi full-application requested peak falls 31.6%, RSS 62.1%, with exact
+  finite embedding preservation on the tested inputs.
+- Reject tokenizer scratch OOM instead of silently dropping text; add real-model
+  allocation-failure and model-free tokenizer regressions.
+- Add a reproducible external SciFact 256-document/100-query benchmark, explicit
+  truncation reporting, fixed quality/peak-memory gates and a separate model
+  nightly workflow. Model/data preparation uses optional Python standard library;
+  the production C library gains no dependency.

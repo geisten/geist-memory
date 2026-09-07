@@ -3,7 +3,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 /* Small-corpus evaluation only; independent of the production search code. */
-enum { QUALITY_DOC_MAX = 32 };
+enum { QUALITY_DOC_MAX = 512 };
 struct quality_result {
     size_t float_rank, binary_rank; /* one-based rank of the relevant document */
     double overlap_at_3;            /* intersection / min(3, document count) */

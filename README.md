@@ -160,6 +160,16 @@ see [model benchmark](docs/MODEL_BENCHMARK.md). This small fixture is not a
 representative multilingual benchmark. Model-free `test-quality` checks its
 ranking calculations and reports with an explicitly labelled mock engine.
 
+`bench-model-large` adds a SHA-pinned external SciFact subset (256 documents,
+100 English queries), explicit 256-token clipping and fixed regression floors.
+Its separate nightly workflow also runs exact embedding-preservation checks,
+full-model allocation failure injection and sanitizers. See the
+[quality results](docs/MODEL_BENCHMARK.md) and
+[allocation measurements and reproduction](docs/MODEL_MEMORY.md).
+The production library gains no tracing or Python dependency; downloaded inputs
+stay outside source packages. The schedule becomes active after the workflow
+lands on the default branch.
+
 Tests cover independent reference search, malformed files, allocation failures,
 short I/O, sync failures, interrupted replacement/creation/compaction and interrupted
 recovery. All eight GitHub CI jobs passed using the same Make targets on
@@ -167,7 +177,7 @@ Linux and macOS x86-64/ARM64, including fully static Linux musl consumers.
 The [validation report](docs/VALIDATION.md) links the exact tested commits and runs.
 Real-model tests remain separate from this model-free CI matrix.
 
-A broader retrieval corpus, numerical engine-reference checks and the remaining
+Representative multilingual/application corpora, numerical engine-reference checks and the remaining
 fault-injection/integrity acceptance remain release gates. This is not yet a
 finished showcase release.
 See [PLAN.md](PLAN.md) and [validation evidence](docs/VALIDATION.md).

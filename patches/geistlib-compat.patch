@@ -123,3 +123,129 @@
 -#if defined(__APPLE__)
 +#if defined(__APPLE__) && (defined(__aarch64__) || defined(__arm64__))
  static bool sysctl_bool(const char *name, bool fallback) {
+--- a/include/geist.h
++++ b/include/geist.h
+@@ -161,2 +161,7 @@
+ geist_model_load(const char *path, struct geist_backend *be, struct geist_model **out);
++
++/* Optional load-time bounds also size model-owned RoPE and default scratch. */
++struct geist_session_opts;
++enum geist_status geist_model_load_with_opts(const char *path, struct geist_backend *be,
++    const struct geist_session_opts *opts, struct geist_model **out);
+ 
+--- a/src/engine/model.c
++++ b/src/engine/model.c
+@@ -172,2 +172,8 @@
+ geist_model_load(const char *path, struct geist_backend *be, struct geist_model **out) {
++    return geist_model_load_with_opts(path, be, nullptr, out);
++}
++
++[[nodiscard]] enum geist_status
++geist_model_load_with_opts(const char *path, struct geist_backend *be,
++                           const struct geist_session_opts *opts, struct geist_model **out) {
+     if (out == nullptr) {
+@@ -249,3 +255,3 @@
+     geist_error_clear_create_time();
+-    void *arch_state = desc->decoder_ops->state_create(be, path, nullptr);
++    void *arch_state = desc->decoder_ops->state_create(be, path, opts);
+     if (arch_state == nullptr) {
+--- a/src/engine/gguf_tokenizer.c
++++ b/src/engine/gguf_tokenizer.c
+@@ -775,7 +775,7 @@
+      * buf_len since each codepoint takes >= 1 byte. */
+     struct bpe_sym *syms = heap_alloc_array_aligned(struct bpe_sym, buf_len);
+     if (syms == nullptr)
+-        return 0;
++        return SIZE_MAX; /* Allocation failure, never an empty chunk. */
+     int    n_syms = 0;
+     size_t k      = 0;
+     while (k < buf_len) {
+@@ -1043,7 +1043,7 @@
+         return 0;
+     struct bpe_sym *syms = heap_alloc_array_aligned(struct bpe_sym, buf_len);
+     if (syms == nullptr)
+-        return 0;
++        return SIZE_MAX; /* Allocation failure, never an empty chunk. */
+     int    n_syms = 0;
+     size_t k      = 0;
+     while (k < buf_len) { /* one symbol per UTF-8 codepoint */
+@@ -1162,7 +1162,9 @@
+         }                                                                             \
+         first_chunk = false;                                                          \
+         if (w_ > 0 && *n_out < cap) {                                                 \
+-            *n_out += spm_chunk_to_ids(tok, buf, w_, out_ids + *n_out, cap - *n_out); \
++            size_t produced_ = spm_chunk_to_ids(tok, buf, w_, out_ids + *n_out, cap - *n_out); \
++            if (produced_ == SIZE_MAX) goto fail; \
++            *n_out += produced_; \
+         }                                                                             \
+     } while (0)
+ 
+@@ -1195,6 +1197,12 @@
+     void *p = buf;
+     safe_free(&p);
+     return true;
++
++fail:
++    p = buf;
++    safe_free(&p);
++    *n_out = 0;
++    return false;
+ }
+ 
+ [[nodiscard]] bool gguf_tokenizer_encode(const struct gguf_tokenizer *tok,
+@@ -1267,8 +1275,11 @@
+                 uint32_t cp = gpt2_byte_to_codepoint((unsigned char) text[b]);
+                 cb_used += utf8_encode_one(cp, chunk_buf + cb_used);
+             }
+-            *n_out += bpe_chunk_to_ids(
++            size_t produced = bpe_chunk_to_ids(
+                     tok, chunk_buf, cb_used, out_ids + *n_out, cap - *n_out, false);
++                if (produced == SIZE_MAX)
++                    goto fail;
++                *n_out += produced;
+             i = end;
+             if (*n_out >= cap)
+                 break;
+@@ -1302,8 +1313,11 @@
+                     uint32_t cp = gpt2_byte_to_codepoint((unsigned char) text[b]);
+                     cb_used += utf8_encode_one(cp, chunk_buf + cb_used);
+                 }
+-                *n_out += bpe_chunk_to_ids(
++                size_t produced = bpe_chunk_to_ids(
+                         tok, chunk_buf, cb_used, out_ids + *n_out, cap - *n_out, false);
++                if (produced == SIZE_MAX)
++                    goto fail;
++                *n_out += produced;
+                 if (*n_out >= cap)
+                     break;
+                 continue; /* outer loop matches the special at i */
+@@ -1323,6 +1337,8 @@
+                 }
+                 size_t produced = bpe_chunk_to_ids(
+                         tok, chunk_buf, cb_used, out_ids + *n_out, cap - *n_out, false);
++                if (produced == SIZE_MAX)
++                    goto fail;
+                 *n_out += produced;
+             }
+             break;
+@@ -1352,6 +1368,8 @@
+         }
+         size_t produced =
+                 bpe_chunk_to_ids(tok, chunk_buf, cb_used, out_ids + *n_out, cap - *n_out, false);
++        if (produced == SIZE_MAX)
++            goto fail;
+         *n_out += produced;
+         if (*n_out >= cap)
+             break;
+@@ -1361,4 +1379,10 @@
+     void *p = chunk_buf;
+     safe_free(&p);
+     return true;
+-}
++
++fail:
++    p = chunk_buf;
++    safe_free(&p);
++    *n_out = 0;
++    return false;
++}

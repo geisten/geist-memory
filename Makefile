@@ -56,8 +56,7 @@ $(ENGINE_LIB): FORCE | check-engine
 $(BUILD)/gm_engine.o: | check-engine
 $(BUILD)/test_gm_e2e: test/test_gm_e2e.c test/test_support.c $(LIB) $(ENGINE_LIB)
 	$(CC) $(CPPFLAGS) $(BASE_FLAGS) $(CFLAGS) -Iinclude -Isrc -Itest $< test/test_support.c $(LIB) $(ENGINE_LIB) $(LDFLAGS) $(SAN_FLAGS) $(LINK_FLAGS) $(ENGINE_LINK_LIBS) -o $@
-test-e2e: check-model
-	+$(MAKE) $(BUILD)/test_gm_e2e
+test-e2e: check-model $(BUILD)/test_gm_e2e
 	GEIST_EMBED_GGUF_PATH='$(GEIST_EMBED_GGUF_PATH)' $(BUILD)/test_gm_e2e
 print-config:
 	@printf '%s\n' 'TARGET=$(TARGET)' 'CC=$(CC)' 'MODE=$(MODE)' 'LINK=$(LINK)' 'BACKENDS=$(BACKENDS)' 'GEMM_PROVIDER=$(GEMM_PROVIDER)' 'GEIST_REV=$(GEIST_REV)' 'ENGINE_PATCH_ID=$(ENGINE_PATCH_ID)' 'BUILD=$(BUILD)'
@@ -169,8 +168,7 @@ test-quality: $(BUILD)/test-quality $(BUILD)/bench-model-mock
 	GM_QUERY_PREFIX='query: ' GM_OMIT_BOS=0 GM_OMIT_EOS=0 GEIST_EMBED_GGUF_PATH=$(BUILD)/model-fixture $(BUILD)/bench-model-mock > $(BUILD)/quality-mock.txt
 	@grep -q '^model_source=mock' $(BUILD)/quality-mock.txt
 	@grep -q '^language=all queries=16 ' $(BUILD)/quality-mock.txt
-bench-model: check-model
-	+$(MAKE) $(BUILD)/bench-model
+bench-model: check-model $(BUILD)/bench-model
 	@$(MAKE) --no-print-directory print-config
 	@$(CC) --version | head -1
 	GEIST_EMBED_GGUF_PATH='$(GEIST_EMBED_GGUF_PATH)' $(BUILD)/bench-model
@@ -215,3 +213,40 @@ prepare-model:
 	@test -n '$(BITNET_SOURCE)' && test -f '$(BITNET_SOURCE)' || { echo 'BITNET_SOURCE must name the official 0.6B GGUF'; exit 1; }
 	@mkdir -p '$(dir $(BITNET_MODEL))'
 	$(PYTHON) tools/prepare-bitnet.py '$(BITNET_SOURCE)' '$(BITNET_MODEL)'
+
+# External, generated fixture; never a dependency of the model-free build.
+QUALITY_HEADER ?= build/quality/scifact.h
+.PHONY: bench-model-large
+bench-model-large: check-model $(BUILD)/bench-model-large
+	@$(MAKE) --no-print-directory print-config
+	GM_TRUNCATE=1 GM_OMIT_BOS=1 GM_OMIT_EOS=0 GEIST_EMBED_GGUF_PATH='$(GEIST_EMBED_GGUF_PATH)' $(BUILD)/bench-model-large
+$(BUILD)/bench-model-large: test/bench_model.c test/quality.c test/quality.h $(QUALITY_HEADER) $(LIB) $(ENGINE_LIB)
+	$(CC) $(CPPFLAGS) $(BASE_FLAGS) $(CFLAGS) -DGM_RETRIEVAL_HEADER='"$(abspath $(QUALITY_HEADER))"' -Iinclude -Isrc -Itest test/bench_model.c test/quality.c $(LIB) $(ENGINE_LIB) $(LDFLAGS) $(SAN_FLAGS) $(LINK_FLAGS) $(ENGINE_LINK_LIBS) -o $@
+
+# GNU ld test instrumentation; production objects and allocator remain unchanged.
+WRAP_ALLOC := malloc calloc realloc aligned_alloc posix_memalign strdup free
+.PHONY: model-memory
+model-memory: check-model $(if $(findstring linux,$(COMPILER_TARGET)),$(BUILD)/test-model-memory)
+	@test '$(findstring linux,$(COMPILER_TARGET))' = linux || { echo 'model-memory requires Linux/GNU ld'; exit 1; }
+	GEIST_EMBED_GGUF_PATH='$(GEIST_EMBED_GGUF_PATH)' $(BUILD)/test-model-memory $(FAULT_PHASE) $(FAULT_AT) $(FAULT_MIN)
+FAULT_PHASE ?= none
+FAULT_AT ?= -1
+FAULT_MIN ?= 0
+$(BUILD)/test-model-memory: test/test_model_memory.c test/model_alloc.c test/model_alloc.h test/test_support.c $(LIB) $(ENGINE_LIB)
+	$(CC) $(CPPFLAGS) $(BASE_FLAGS) $(CFLAGS) -Iinclude -Isrc -Itest test/test_model_memory.c test/model_alloc.c test/test_support.c $(LIB) $(ENGINE_LIB) $(foreach name,$(WRAP_ALLOC),-Wl,--wrap=$(name)) $(LDFLAGS) $(SAN_FLAGS) $(ENGINE_LINK_LIBS) -o $@
+.PHONY: test-model-alloc
+test-model-alloc: $(BUILD)/test-model-alloc
+	$(BUILD)/test-model-alloc
+$(BUILD)/test-model-alloc: test/test_model_alloc.c test/model_alloc.c test/model_alloc.h
+	@mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(BASE_FLAGS) $(CFLAGS) -fno-builtin -Iinclude -Isrc -Itest test/test_model_alloc.c test/model_alloc.c $(foreach name,$(WRAP_ALLOC),-Wl,--wrap=$(name)) $(LDFLAGS) $(SAN_FLAGS) -o $@
+.PHONY: test-model-equivalence
+test-model-equivalence: check-model $(BUILD)/test-model-equivalence
+	GEIST_EMBED_GGUF_PATH='$(GEIST_EMBED_GGUF_PATH)' $(BUILD)/test-model-equivalence
+$(BUILD)/test-model-equivalence: test/test_model_equivalence.c $(ENGINE_LIB)
+	$(CC) $(CPPFLAGS) $(BASE_FLAGS) $(CFLAGS) -Iinclude -Isrc -Itest -I$(ENGINE_SRC)/include $< $(ENGINE_LIB) $(LDFLAGS) $(SAN_FLAGS) $(ENGINE_LINK_LIBS) -o $@
+.PHONY: test-tokenizer-oom
+test-tokenizer-oom: $(BUILD)/test-tokenizer-oom
+	$(BUILD)/test-tokenizer-oom
+$(BUILD)/test-tokenizer-oom: test/test_tokenizer_oom.c test/model_alloc.c test/model_alloc.h $(ENGINE_LIB)
+	$(CC) $(CPPFLAGS) $(BASE_FLAGS) $(CFLAGS) -Iinclude -Isrc -Itest -I$(ENGINE_SRC)/src/engine -I$(ENGINE_SRC)/src/io test/test_tokenizer_oom.c test/model_alloc.c $(ENGINE_LIB) $(foreach name,$(WRAP_ALLOC),-Wl,--wrap=$(name)) $(LDFLAGS) $(SAN_FLAGS) $(ENGINE_LINK_LIBS) -o $@

@@ -38,5 +38,14 @@ int main(void) {
     CHECK(!quality_compare(1, 8, docs, query, 1, &r));
     CHECK(!quality_compare(1, 7, docs, query, 0, &r));
     CHECK(!quality_compare(1, 8, nullptr, query, 0, &r));
+    /* Large evaluator bounds and tie order, independent of model inference. */
+    static float many[QUALITY_DOC_MAX * 8];
+    for (size_t i = 0; i < sizeof many / sizeof *many; ++i)
+        many[i] = 1;
+    for (size_t i = 0; i < 8; ++i)
+        query[i] = 1;
+    CHECK(quality_compare(QUALITY_DOC_MAX, 8, many, query, QUALITY_DOC_MAX - 1, &r));
+    CHECK(r.float_rank == QUALITY_DOC_MAX && r.binary_rank == QUALITY_DOC_MAX);
+    CHECK(!quality_compare(QUALITY_DOC_MAX + 1, 8, many, query, 0, &r));
     puts("PASS: cosine/sign ranking, ties, overlap, non-finite and zero vectors");
 }

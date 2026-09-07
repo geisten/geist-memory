@@ -66,9 +66,9 @@ enum gm_status gm_engine_open(const char *path, bool omit_bos, bool omit_eos,
     e->omit_bos = omit_bos;
     e->omit_eos = omit_eos;
     enum geist_status s = geist_backend_create("auto", nullptr, nullptr, &e->backend);
-    if (s == GEIST_OK)
-        s = geist_model_load(path, e->backend, &e->model);
     const struct geist_session_opts opts = {.max_seq_len = GM_WINDOW + 2};
+    if (s == GEIST_OK)
+        s = geist_model_load_with_opts(path, e->backend, &opts, &e->model);
     if (s == GEIST_OK)
         s = geist_session_create(e->model, e->backend, &opts, &e->session);
     if (s != GEIST_OK) {

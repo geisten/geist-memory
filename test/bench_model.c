@@ -7,7 +7,15 @@
 #include <string.h>
 #include <sys/resource.h>
 #include <time.h>
-#include "retrieval_cases.h"
+#ifndef GM_RETRIEVAL_HEADER
+#define GM_RETRIEVAL_HEADER "retrieval_cases.h"
+#endif
+#include GM_RETRIEVAL_HEADER
+#ifndef RETRIEVAL_CORPUS
+#define RETRIEVAL_CORPUS "geist-memory-retrieval-v1"
+#endif
+static size_t truncated_inputs;
+static bool truncate_inputs;
 
 static double now(void) {
     struct timespec t;
@@ -23,13 +31,15 @@ static int compare_time(const void *a, const void *b) {
 }
 static enum gm_status embed(struct gm_engine *engine, size_t dim, const char *text,
                             const float **vector, size_t *tokens) {
-    int32_t ids[GM_WINDOW + 1];
-    enum gm_status s = gm_engine_tokenize(engine, text, GM_WINDOW + 1, ids, tokens);
+    static int32_t ids[GM_TOKENS + 1];
+    enum gm_status s = gm_engine_tokenize(engine, text, GM_TOKENS + 1, ids, tokens);
     if (s != GM_OK)
         return s;
-    if (*tokens > GM_WINDOW)
+    if (*tokens > GM_TOKENS || (*tokens > GM_WINDOW && !truncate_inputs))
         return GM_E_TOO_LONG;
-    return gm_engine_embed(engine, *tokens, ids, dim, vector);
+    if (*tokens > GM_WINDOW)
+        ++truncated_inputs;
+    return gm_engine_embed(engine, *tokens > GM_WINDOW ? GM_WINDOW : *tokens, ids, dim, vector);
 }
 struct metrics {
     size_t queries, float_at_1, float_at_3, binary_at_1, binary_at_3;
@@ -46,6 +56,8 @@ static void record(struct metrics *m, const struct quality_result *r) {
     m->overlap += r->overlap_at_3;
 }
 static void report(const char *language, const struct metrics *m) {
+    if (!m->queries)
+        return;
     double n = (double)m->queries;
     printf("language=%s queries=%zu float_recall_at_1=%.4f float_recall_at_3=%.4f "
            "float_mrr=%.4f binary_recall_at_1=%.4f binary_recall_at_3=%.4f "
@@ -56,6 +68,10 @@ static void report(const char *language, const struct metrics *m) {
 }
 int main(void) {
     setvbuf(stdout, nullptr, _IOLBF, 0);
+    const char *truncate = getenv("GM_TRUNCATE");
+    if (truncate && strcmp(truncate, "0") && strcmp(truncate, "1"))
+        return 2;
+    truncate_inputs = truncate && !strcmp(truncate, "1");
     const char *path = getenv("GEIST_EMBED_GGUF_PATH");
     const char *prefix = getenv("GM_QUERY_PREFIX");
     const char *bos = getenv("GM_OMIT_BOS"), *eos = getenv("GM_OMIT_EOS");
@@ -89,7 +105,7 @@ int main(void) {
         s = GM_E_ENGINE;
         goto done;
     }
-    /* count <= 32 and dim <= 65536 bound this allocation to 8 MiB. */
+    /* count <= 512 and dim <= 65536 bound this allocation to 128 MiB. */
     documents = malloc(count * dim * sizeof *documents);
     if (!documents) {
         s = GM_E_OOM;
@@ -103,11 +119,11 @@ int main(void) {
     printf("model_sha256=");
     for (size_t i = 0; i < sizeof digest; ++i)
         printf("%02x", digest[i]);
-    printf("\ncorpus=geist-memory-retrieval-v1 documents=%zu dimension=%zu "
+    printf("\ncorpus=%s documents=%zu dimension=%zu "
            "window=%d overlap=%d omit_bos=%d omit_eos=%d\nquery_prefix=%s\n",
-           count, dim, GM_WINDOW, GM_OVERLAP, omit_bos, omit_eos, prefix);
+           RETRIEVAL_CORPUS, count, dim, GM_WINDOW, GM_OVERLAP, omit_bos, omit_eos, prefix);
     double doc_start = now();
-    size_t doc_tokens = 0, query_tokens = 0;
+    size_t doc_tokens = 0, query_tokens = 0, processed_doc_tokens = 0, processed_query_tokens = 0;
     for (size_t i = 0; i < count; ++i) {
         const float *v = nullptr;
         size_t n = 0;
@@ -116,6 +132,9 @@ int main(void) {
             goto done;
         memcpy(documents + i * dim, v, dim * sizeof *v);
         doc_tokens += n;
+        processed_doc_tokens += n > GM_WINDOW ? GM_WINDOW : n;
+        if ((i + 1) % 16 == 0)
+            printf("embedded_documents=%zu/%zu\n", i + 1, count);
     }
     double docs_s = now() - doc_start, times[queries];
     struct metrics metrics[3] = {0}; /* all, de, en */
@@ -134,6 +153,7 @@ int main(void) {
         if (s != GM_OK)
             goto done;
         query_tokens += n;
+        processed_query_tokens += n > GM_WINDOW ? GM_WINDOW : n;
         struct quality_result r;
         if (!quality_compare(count, dim, documents, v, retrieval_queries[i].relevant, &r)) {
             s = GM_E_ENGINE;
@@ -145,6 +165,10 @@ int main(void) {
         record(&metrics[0], &r);
         record(&metrics[!strcmp(retrieval_queries[i].language, "de") ? 1 : 2], &r);
     }
+    printf("processed_document_tokens=%zu processed_query_tokens=%zu\n", processed_doc_tokens,
+           processed_query_tokens);
+    printf("truncation=%s truncated_inputs=%zu input_tokens_include_truncated=1\n",
+           truncate_inputs ? "first-256-content-tokens" : "reject", truncated_inputs);
     report("all", &metrics[0]);
     report("de", &metrics[1]);
     report("en", &metrics[2]);

@@ -140,3 +140,87 @@ smaller than the measured scalar backend; it adds no external runtime library.
 The binary ranking differs slightly between the two engine backends. These
 results do not establish bit-identical embeddings across platforms/backends,
 nor do they isolate hardware performance from backend implementation differences.
+
+## Larger external corpus: SciFact-256/100
+
+`make bench-model-large` uses a generated, external fixture with 256 documents
+and 100 queries from [BEIR SciFact](https://github.com/beir-cellar/beir).
+Source dataset: Wadden et al., [SciFact](https://github.com/allenai/scifact),
+*Fact or Fiction: Verifying Scientific Claims*. Claims/evidence annotations are
+CC BY 4.0; abstracts are ODC-By 1.0 according to the
+[source license](https://github.com/allenai/scifact/blob/master/LICENSE.md).
+Neither dataset text nor model weights are committed or shipped in library packages.
+
+The BEIR archive is fixed by SHA-256
+`536e14446a0ba56ed1398ab1055f39fe852686ecad24a6306c80c490fa8e0165`.
+`tools/prepare-quality.py` uses only Python's standard library and refuses other
+hashes. Selection v1 takes the first 100 numerically sorted BEIR test query IDs
+with exactly one positive judgment, includes every relevant document, and fills
+the candidate set to 256 using SHA-ordered distractor IDs. A JSON manifest records
+all selected IDs and the generated-header hash; no model output influences selection.
+
+Each document is its title followed by its abstract. The benchmark tokenizes
+within a 65536-token bound and explicitly uses the **first 256 content tokens**
+for long inputs, appending EOS. It reports the truncation count and token policy;
+the small DE/EN benchmark continues to reject truncation by default. This is
+single-window document retrieval, not a test of the library's multi-chunk
+aggregation. It is larger external evidence, **not the full BEIR SciFact score**
+and not representative German/multilingual or application-specific acceptance.
+Filtering single-positive queries and reducing the distractor pool make this a
+different, potentially easier task than full-corpus SciFact retrieval.
+
+```sh
+mkdir -p build/quality
+curl -fL https://public.ukp.informatik.tu-darmstadt.de/thakur/BEIR/datasets/scifact.zip -o build/quality/scifact.zip
+python3 tools/prepare-quality.py build/quality/scifact.zip build/quality/scifact.h
+mkdir -p build/model-results
+make -j4 BACKENDS=cpu_neon bench-model-large > build/model-results/quality.log 2>&1
+python3 tools/check-model-quality.py build/model-results/quality.log
+```
+
+The check script requires all 100 distinct query records, the fixed corpus,
+model SHA and BOS/EOS/prefix policy. Initial conservative regression floors are
+Float Recall@3 >= 50%, Binary Recall@3 >= 45%, and at most 15 percentage points
+of binary Recall@3 loss versus float. These floors were chosen before the first
+large result, not tuned to make a failing result pass. They detect gross
+regressions; passing them is not an application-quality guarantee.
+
+## Larger measured results, 2026-09-07
+
+Both runs use `cpu_neon`, native GEMM, the same fixed model, 256 candidates and
+100 English queries. 181 documents exceed the first-256-content-token window;
+60915 document tokens and 2084 query tokens are actually embedded. The source
+contains 90371 document tokens before clipping.
+
+| Host | Float R@1 | Binary R@1 | Float R@3 | Binary R@3 | Float MRR | Binary MRR |
+| --- | --- | --- | --- | --- | --- | --- |
+| Pi5, GCC 14 | 90% | 80% | 94% | 92% | 0.9235 | 0.8630 |
+| macOS ARM64, Apple Clang 21 | 90% | 84% | 95% | 95% | 0.9244 | 0.8890 |
+
+Both pass the preselected regression floors. Top-three overlap is 0.6867 on Pi
+and 0.6333 on macOS. Binary ranking loses ten and six percentage points of
+Recall@1 respectively, even where Recall@3 remains close to float.
+
+Pi document/query inference takes 1517.34/42.87 seconds, query p50/p95
+375.19/776.27 ms. macOS takes 465.99/12.65 seconds, p50/p95 110.76/228.03 ms.
+These runs shared their hosts with other acceptance work. The Pi quality run
+started before bounded model loading (RSS 818.27 MiB); macOS uses bounded
+loading (RSS 430.50 MiB). These are not controlled before/after memory or speed
+comparisons. See [MODEL_MEMORY.md](MODEL_MEMORY.md) for matched Pi measurements
+and exact legacy/bounded embedding checks. Backend/platform KV precision also
+differs, so ranking differences cannot be attributed solely to hardware.
+
+## Nightly orchestration
+
+`.github/workflows/model-nightly.yml` defines a separate 02:23 UTC nightly and
+manual workflow on native Linux ARM64, with a 90-minute job limit. It downloads
+hash-pinned inputs, performs the larger quality gate, exact embedding preservation,
+real allocation-failure tests and ASan/UBSan/LeakSanitizer E2E. Reports, selection
+IDs and failure logs are retained as artifacts for 30 days; weights are excluded.
+The ordinary CI matrix remains model-free and adds the small allocator-wrapper
+self-test and real-tokenizer OOM regression on Linux.
+
+Scheduled/manual dispatch requires this workflow to exist on the repository's
+default branch. Publishing it on an acceptance branch alone does not activate
+the nightly schedule. See [GitHub's workflow documentation](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/manually-run-a-workflow).
+The actual activation status and run evidence are tracked in VALIDATION.md.

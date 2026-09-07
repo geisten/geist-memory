@@ -22,9 +22,10 @@ jobs:
         env:
           CC: ${{ matrix.cc }}
           GEISTLIB: build/geistlib
-      - run: make -j2 MODE=asan check fuzz
+      - run: make -j2 MODE=asan check fuzz test-model-alloc test-tokenizer-oom
         env:
           CC: ${{ matrix.cc }}
+          GEISTLIB: build/geistlib
       - name: Real ENOSPC on a disposable filesystem
         run: |
           sudo mkdir /mnt/gm-enospc

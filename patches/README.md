@@ -27,3 +27,21 @@ The acceptance runs reproduced these issues:
 No CPU minimum is silently raised. Model preparation separately addresses the
 pinned engine's F32 normalization and metadata contract; see
 [MODEL_BENCHMARK.md](../docs/MODEL_BENCHMARK.md).
+
+The model allocation acceptance adds `geist_model_load_with_opts`, an additive
+engine entry point that passes explicit session bounds to model creation. The
+existing `geist_model_load` retains its default behavior. geist-memory passes
+its 258-token bound at load and session creation; otherwise the engine creates
+model-owned RoPE/default-session buffers for 4096 tokens even though no public
+operation can use that capacity. The regression compares exact finite embeddings
+from legacy and bounded loads, including a full window. This does not change
+KV precision, batching, weights, or the model fingerprint policy.
+
+Full-model fault injection also reproduced silent token loss: BPE/Unigram
+scratch allocation failure returned a zero-length chunk, and the enclosing
+encoder reported success. Return an internal `SIZE_MAX` failure sentinel and
+propagate it through every GPT-2/Qwen2/SPM/Unigram call site; free scratch and
+zero the reported token count before returning failure. The adapter then rejects
+the operation before committing changed vectors. `test-tokenizer-oom` injects
+every scratch allocation for synthetic inputs in all four paths, including
+special-token boundaries, and verifies cleanup and identical successful retries.
