@@ -23,6 +23,10 @@
   `GEIST_REPO` into `build/deps/geistlib` at the pin and applies the compat patch.
   `GEISTLIB=` is gone; a local path in `GEIST_REPO` builds offline. `check-deps`
   keeps the script byte-identical with geistlib's reference copy.
+- Index document paths with an open-addressing hash table (from PR #1, ported to
+  the v2 store). Re-indexing a tree was quadratic in the document count; `find_doc`
+  is now a probe. The table is rebuilt at open and on growth, never persisted, and
+  counted in `gm_stats.memory_bytes`.
 - Split the geistlib embedder out of the core archive. `libgeist_memory.a` has no
   geistlib dependency; `libgeist_memory_geist.a` implements the now public
   link-time contract `geist_memory_embedder.h`. Consumers link

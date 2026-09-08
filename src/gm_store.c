@@ -40,7 +40,15 @@ struct gm_store {
     size_t n_chunks, cap_chunks;
     size_t n_docs, cap_docs;
     size_t live;
+    /* Path -> document index: open addressing, linear probing, power-of-two
+     * capacity kept at or above 2x n_docs. A slot holds a document index or
+     * INDEX_EMPTY; the path is compared against docs[slot].path on a hit.
+     * Rebuilt from docs[] at open and on growth, never persisted. It replaces
+     * a strcmp scan that made a tree pass quadratic. */
+    uint32_t *index;
+    size_t index_cap;
 };
+#define INDEX_EMPTY UINT32_MAX
 
 static const char *const VECS_NAME = "vectors.gm";
 static const char *const CHUNKS_NAME = "chunks.gm";
@@ -435,6 +443,7 @@ static bool sync_parent(const char *dir) {
     return ok;
 }
 
+[[nodiscard]] static enum gm_status index_reserve(struct gm_store *st, size_t n_docs);
 enum gm_status gm_store_open_limited(const char *dir, size_t dim, uint64_t model_fp, size_t budget,
                                      struct gm_store **out) {
     if (out != nullptr)
@@ -571,6 +580,10 @@ enum gm_status gm_store_open_limited(const char *dir, size_t dim, uint64_t model
         st->live += st->chunks[i].generation == st->docs[st->chunks[i].doc].generation;
     st->cap_chunks = st->n_chunks;
     st->cap_docs = st->n_docs;
+    if (st->n_docs && (s = index_reserve(st, st->n_docs)) != GM_OK) {
+        gm_store_close(st);
+        return s;
+    }
     *out = st;
     return GM_OK;
 }
@@ -596,6 +609,7 @@ void gm_store_close(struct gm_store *st) {
     free(st->vecs);
     free(st->chunks);
     free(st->docs);
+    free(st->index);
     free(st);
 }
 
@@ -619,15 +633,45 @@ size_t gm_store_live_chunks(const struct gm_store *st) {
     return st && !st->poisoned ? st->live : 0;
 }
 
+static uint64_t fnv1a(const char *p) {
+    uint64_t h = 1469598103934665603ULL;
+    for (; *p; ++p)
+        h = (h ^ (unsigned char)*p) * 1099511628211ULL;
+    return h;
+}
+/* The slot holding `path`, or the empty slot where it would go. */
+static size_t index_slot(const struct gm_store *st, const char *path) {
+    const size_t mask = st->index_cap - 1u;
+    size_t i = (size_t)fnv1a(path) & mask;
+    while (st->index[i] != INDEX_EMPTY && strcmp(st->docs[st->index[i]].path, path) != 0)
+        i = (i + 1u) & mask;
+    return i;
+}
+/* Grow the table so that n_docs documents stay under half full. The old
+ * table survives an allocation failure. ponytail: not counted against the
+ * store budget, at most 16 bytes per document beside a 256-byte record. */
+[[nodiscard]] static enum gm_status index_reserve(struct gm_store *st, size_t n_docs) {
+    size_t cap = st->index_cap ? st->index_cap : 64u;
+    while (cap < 2u * n_docs)
+        cap *= 2u;
+    if (cap == st->index_cap)
+        return GM_OK;
+    uint32_t *table = gm_alloc(cap * sizeof *table);
+    if (!table)
+        return GM_E_OOM;
+    memset(table, 0xff, cap * sizeof *table);
+    free(st->index);
+    st->index = table;
+    st->index_cap = cap;
+    for (size_t i = 0; i < st->n_docs; ++i)
+        st->index[index_slot(st, st->docs[i].path)] = (uint32_t)i;
+    return GM_OK;
+}
 static size_t find_doc(const struct gm_store *st, const char *path) {
-    /* Linear lookup keeps metadata small. Consider a path index only when
-     * measured indexing time justifies its memory and maintenance cost. */
-    for (size_t i = 0; i < st->n_docs; i++) {
-        if (strcmp(st->docs[i].path, path) == 0) {
-            return i;
-        }
-    }
-    return SIZE_MAX;
+    if (!st->index_cap)
+        return SIZE_MAX;
+    const uint32_t slot = st->index[index_slot(st, path)];
+    return slot == INDEX_EMPTY ? SIZE_MAX : slot;
 }
 
 static size_t next_cap(size_t cap, size_t need) {
@@ -724,7 +768,9 @@ enum gm_status gm_store_replace(struct gm_store *st, const char *path, size_t co
     if (found != SIZE_MAX && st->docs[found].generation == UINT32_MAX)
         return GM_E_LIMIT;
     doc.generation = found == SIZE_MAX ? 1u : st->docs[found].generation + 1u;
-    enum gm_status s = reserve_chunks(st, next_count);
+    enum gm_status s = found == SIZE_MAX ? index_reserve(st, st->n_docs + 1u) : GM_OK;
+    if (s == GM_OK)
+        s = reserve_chunks(st, next_count);
     if (s != GM_OK)
         return s;
     if (index == st->cap_docs) {
@@ -780,8 +826,10 @@ enum gm_status gm_store_replace(struct gm_store *st, const char *path, size_t co
     }
     free(records);
     st->docs[index] = doc;
-    if (found == SIZE_MAX)
+    if (found == SIZE_MAX) {
+        st->index[index_slot(st, doc.path)] = (uint32_t)index;
         ++st->n_docs;
+    }
     st->n_chunks = next_count;
     st->live = st->live - old_live + count;
     return GM_OK;
@@ -796,8 +844,9 @@ enum gm_status gm_store_stats(const struct gm_store *st, struct gm_stats *out) {
         return GM_E_UNCERTAIN;
     out->documents = st->n_docs;
     out->live_chunks = gm_store_live_chunks(st);
-    out->memory_bytes =
-        st->cap_docs * sizeof *st->docs + st->cap_chunks * (st->bytes + sizeof *st->chunks);
+    out->memory_bytes = st->cap_docs * sizeof *st->docs +
+                        st->cap_chunks * (st->bytes + sizeof *st->chunks) +
+                        st->index_cap * sizeof *st->index;
     out->disk_bytes = 3u * GM_HEADER_BYTES + st->n_docs * (GM_DOC_PAYLOAD + 32u) +
                       st->n_chunks * (st->bytes + GM_CHUNK_PAYLOAD + 64u);
     out->obsolete_chunks = st->n_chunks - out->live_chunks;

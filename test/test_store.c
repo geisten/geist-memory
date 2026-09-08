@@ -148,7 +148,7 @@ static void oom(void) {
     }
 }
 static void growth_and_compaction_oom(void) {
-    for (long fail = 0; fail <= 4; ++fail) {
+    for (long fail = 0; fail <= 5; ++fail) {
         char dir[64];
         test_dir(dir);
         struct gm_store *st = nullptr;
@@ -159,17 +159,17 @@ static void growth_and_compaction_oom(void) {
             snprintf(id, sizeof id, "doc%zu", i);
             CHECK(gm_store_replace(st, id, 1, bits) == GM_OK);
         }
-        /* The 65th document grows vector, chunk and document arrays, then
-         * allocates transaction metadata. Fail each allocation in turn. */
+        /* The 65th document grows the path index, vector, chunk and document
+         * arrays, then allocates transaction metadata. Fail each in turn. */
         gm_test_alloc_after = fail;
         enum gm_status result = gm_store_replace(st, "new", 1, bits);
         gm_test_alloc_after = -1;
-        CHECK(result == (fail < 4 ? GM_E_OOM : GM_OK));
-        CHECK(gm_store_live_chunks(st) == (fail < 4 ? 64u : 65u));
+        CHECK(result == (fail < 5 ? GM_E_OOM : GM_OK));
+        CHECK(gm_store_live_chunks(st) == (fail < 5 ? 64u : 65u));
         CHECK(!strcmp(gm_store_doc_path(st, 0), "doc0"));
         gm_store_close(st);
         CHECK(gm_store_open(dir, 64, 7, &st) == GM_OK);
-        CHECK(gm_store_live_chunks(st) == (fail < 4 ? 64u : 65u));
+        CHECK(gm_store_live_chunks(st) == (fail < 5 ? 64u : 65u));
         gm_store_close(st);
         test_clean(dir);
     }
@@ -197,9 +197,39 @@ static void growth_and_compaction_oom(void) {
         test_clean(dir);
     }
 }
+/* Lookups survive index rebuilds (64 -> 128 -> 256 -> 512 slots) and reopen. */
+static void path_index(void) {
+    char dir[64];
+    test_dir(dir);
+    struct gm_store *st = nullptr;
+    CHECK(gm_store_open(dir, 64, 7, &st) == GM_OK);
+    uint8_t bits[8] = {0};
+    char id[32];
+    for (size_t pass = 0; pass < 2; ++pass) {
+        for (size_t i = 0; i < 300; ++i) {
+            snprintf(id, sizeof id, "path/%zu", i);
+            CHECK(gm_store_replace(st, id, 1, bits) == GM_OK);
+        }
+        struct gm_stats stats;
+        CHECK(gm_store_stats(st, &stats) == GM_OK);
+        CHECK(stats.documents == 300 && stats.live_chunks == 300);
+        gm_store_close(st);
+        CHECK(gm_store_open(dir, 64, 7, &st) == GM_OK);
+    }
+    bits[0] = 255;
+    CHECK(gm_store_replace(st, "path/150", 1, bits) == GM_OK);
+    CHECK(gm_store_replace(st, "path/1500", 1, bits) == GM_OK);
+    struct gm_stats stats;
+    CHECK(gm_store_stats(st, &stats) == GM_OK);
+    CHECK(stats.documents == 301 && stats.live_chunks == 301 && stats.obsolete_chunks == 1);
+    CHECK(!strcmp(gm_store_doc_path(st, 150), "path/150"));
+    gm_store_close(st);
+    test_clean(dir);
+}
 int main(void) {
     CHECK(gm_store_open("/tmp/unused", 64, 7, nullptr) == GM_E_INVALID_ARG);
     search();
+    path_index();
     invalid_files();
     oom();
     special_files();
