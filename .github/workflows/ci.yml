@@ -1,0 +1,71 @@
+name: C23 library
+on: [push, pull_request, workflow_dispatch]
+permissions:
+  contents: read
+jobs:
+  linux:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+        cc: [gcc-14, clang-19]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y gcc-14 g++-14 clang-19
+      - name: Core without dependencies
+        run: make -j2 check
+        env:
+          CC: ${{ matrix.cc }}
+      - run: make deps check-deps
+        env:
+          CC: ${{ matrix.cc }}
+      - run: make -j2 check-linkage check-install example model-tools import-tool check-package
+        env:
+          CC: ${{ matrix.cc }}
+      - run: make -j2 MODE=asan check fuzz test-model-alloc test-tokenizer-oom
+        env:
+          CC: ${{ matrix.cc }}
+      - name: Real ENOSPC on a disposable filesystem
+        run: |
+          sudo mkdir /mnt/gm-enospc
+          sudo mount -t tmpfs -o size=32m tmpfs /mnt/gm-enospc
+          sudo chown "$USER" /mnt/gm-enospc
+          trap 'sudo umount /mnt/gm-enospc' EXIT
+          make MODE=asan test-enospc ENOSPC_DIR=/mnt/gm-enospc
+        env:
+          CC: ${{ matrix.cc }}
+      - if: matrix.cc == 'clang-19'
+        run: make CC=clang-19 analyze fuzz-libfuzzer FUZZ_CC=clang-19 FUZZ_SECONDS=30
+  macos:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-15, macos-15-intel]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: brew install llvm
+      - run: echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
+      - name: Core without dependencies
+        run: make -j2 CC=clang check
+      - run: make CC=clang deps check-deps
+      - run: make -j2 CC=clang check-linkage check-install example model-tools import-tool check-package
+      - run: make -j2 CC=clang MODE=asan check fuzz
+      - run: make CC=clang analyze format-check
+      - run: make -j2 CC=clang check-repro
+  musl-static:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: >-
+          docker run --rm --tmpfs /enospc:size=32m -v "$PWD:/work" -w /work alpine:3.22
+          sh -ec 'apk add --no-cache build-base clang git binutils tar gzip linux-headers pkgconf;
+          make -j2 CC=clang LINK=static check;
+          make CC=clang LINK=static deps check-deps;
+          make -j2 CC=clang LINK=static
+          check-linkage check-install example model-tools import-tool check-package test-enospc ENOSPC_DIR=/enospc'

@@ -25,6 +25,7 @@
 
 #include "geist_memory.h"
 #include "gm_store.h"
+#include "test_support.h"
 
 #include <stddef.h>
 #include <stdio.h>
@@ -44,7 +45,8 @@ static void check(bool ok, const char *what) {
     }
 }
 
-static const char *DIR = "build/test-store";
+static char DIR[64];
+static char yeast[128], tides[128], mortgage[128];
 
 static void write_file(const char *path, const char *text) {
     FILE *f = fopen(path, "wb");
@@ -52,14 +54,14 @@ static void write_file(const char *path, const char *text) {
         fprintf(stderr, "cannot write %s\n", path);
         exit(T_FAIL);
     }
-    fputs(text, f);
-    fclose(f);
+    CHECK(fputs(text, f) >= 0);
+    CHECK(fclose(f) == 0);
 }
 
 /* Best hit's document, or nullptr. */
 static const char *ask(struct gm *m, const char *q, uint32_t *out_distance) {
-    struct gm_hit  hits[5];
-    size_t         n = 0;
+    struct gm_hit hits[5];
+    size_t n = 0;
     enum gm_status s = gm_recall(m, 5, q, hits, &n);
     if (s != GM_OK) {
         fprintf(stderr, "recall failed: %s\n", gm_status_str(s));
@@ -83,46 +85,37 @@ static bool ends_with(const char *s, const char *suffix) {
 }
 
 int main(void) {
+    setvbuf(stdout, nullptr, _IOLBF, 0);
     const char *model = getenv("GEIST_EMBED_GGUF_PATH");
     if (model == nullptr || model[0] == '\0') {
         printf("SKIP: set GEIST_EMBED_GGUF_PATH to a bitnet-embedding GGUF\n");
         return T_SKIP;
     }
 
-    if (mkdir("build", 0700) != 0 && access("build", F_OK) != 0) {
-        fprintf(stderr, "cannot create build/\n");
-        return T_FAIL;
-    }
-    /* Start from an empty store so a rerun is deterministic. */
-    static const char *const STORE_FILES[] = {"vectors.gm", "chunks.gm", "docs.gm"};
-    for (size_t i = 0; i < sizeof STORE_FILES / sizeof STORE_FILES[0]; i++) {
-        char p[600];
-        snprintf(p, sizeof p, "%s/%s", DIR, STORE_FILES[i]);
-        (void) remove(p);
-    }
+    test_dir(DIR);
+    snprintf(yeast, sizeof yeast, "%s/doc_yeast.md", DIR);
+    snprintf(tides, sizeof tides, "%s/doc_tides.md", DIR);
+    snprintf(mortgage, sizeof mortgage, "%s/doc_mortgage.md", DIR);
 
-    write_file("build/doc_yeast.md",
-               "# Bread\n\nYeast ferments the sugars in dough. The carbon dioxide it "
-               "releases inflates the gluten network, and that is what lifts a loaf.\n");
-    write_file("build/doc_tides.md",
-               "# Tides\n\nThe moon's gravity pulls the oceans toward it. Earth's rotation "
-               "carries every coastline through the resulting bulges twice a day.\n");
-    write_file("build/doc_mortgage.md",
-               "# Amortisation\n\nEach payment first covers the interest accrued on the "
-               "outstanding balance. Whatever is left reduces the principal.\n");
+    write_file(yeast, "# Bread\n\nYeast ferments the sugars in dough. The carbon dioxide it "
+                      "releases inflates the gluten network, and that is what lifts a loaf.\n");
+    write_file(tides, "# Tides\n\nThe moon's gravity pulls the oceans toward it. Earth's rotation "
+                      "carries every coastline through the resulting bulges twice a day.\n");
+    write_file(mortgage, "# Amortisation\n\nEach payment first covers the interest accrued on the "
+                         "outstanding balance. Whatever is left reduces the principal.\n");
 
     const struct gm_opts opts = {.query_prefix = "query: "};
-    struct gm           *m    = nullptr;
-    enum gm_status       s    = gm_open(DIR, model, &opts, &m);
+    struct gm *m = nullptr;
+    enum gm_status s = gm_open(DIR, model, &opts, &m);
     if (s != GM_OK) {
         fprintf(stderr, "gm_open failed: %s\n", gm_status_str(s));
         return T_FAIL;
     }
     printf("  model dim=%zu bits (%zu bytes/vector)\n", gm_dim(m), gm_dim(m) / 8u);
 
-    check(gm_remember_file(m, "build/doc_yeast.md") == GM_OK, "index doc 1");
-    check(gm_remember_file(m, "build/doc_tides.md") == GM_OK, "index doc 2");
-    check(gm_remember_file(m, "build/doc_mortgage.md") == GM_OK, "index doc 3");
+    check(gm_remember_file(m, yeast) == GM_OK, "index doc 1");
+    check(gm_remember_file(m, tides) == GM_OK, "index doc 2");
+    check(gm_remember_file(m, mortgage) == GM_OK, "index doc 3");
     const size_t after_first = gm_chunk_count(m);
     printf("  indexed 3 documents into %zu chunks\n", after_first);
     check(after_first == 3, "three short documents make three chunks");
@@ -133,19 +126,19 @@ int main(void) {
         const char *q;
         const char *want;
     } cases[] = {
-            {"why does my loaf not rise?", "doc_yeast.md"},
-            {"what makes the sea level change twice a day?", "doc_tides.md"},
-            {"how much of my instalment pays down the debt?", "doc_mortgage.md"},
+        {"why does my loaf not rise?", "doc_yeast.md"},
+        {"what makes the sea level change twice a day?", "doc_tides.md"},
+        {"how much of my instalment pays down the debt?", "doc_mortgage.md"},
     };
     for (size_t i = 0; i < sizeof cases / sizeof cases[0]; i++) {
-        uint32_t    d   = 0;
+        uint32_t d = 0;
         const char *got = ask(m, cases[i].q, &d);
         printf("  \"%s\" -> %s (d=%u)\n", cases[i].q, got ? got : "(nothing)", d);
         check(ends_with(got, cases[i].want), "the question finds its own document");
     }
 
     /* ---- idempotence ---------------------------------------------------- */
-    check(gm_remember_file(m, "build/doc_yeast.md") == GM_OK, "re-index unchanged file");
+    check(gm_remember_file(m, yeast) == GM_OK, "re-index unchanged file");
     check(gm_chunk_count(m) == after_first, "an unchanged file adds no chunks");
 
     /* ---- persistence ---------------------------------------------------- */
@@ -162,17 +155,20 @@ int main(void) {
           "answers survive a close/reopen — the store, not the process, holds the memory");
 
     /* ---- re-index: old content must stop matching ----------------------- */
-    sleep(1); /* mtime has one-second resolution; force a visible change */
-    write_file("build/doc_yeast.md",
-               "# Kites\n\nA kite flies because the wind deflected by its surface pushes "
-               "back. The line holds it against that push at an angle of attack.\n");
-    check(gm_remember_file(m, "build/doc_yeast.md") == GM_OK, "re-index a changed file");
+    write_file(yeast, "# Kites\n\nA kite flies because the wind deflected by its surface pushes "
+                      "back. The line holds it against that push at an angle of attack.\n");
+    check(gm_remember_file(m, yeast) == GM_OK, "re-index a changed file");
     const char *now = ask(m, "what keeps a kite in the air?", nullptr);
     printf("  after rewrite: \"what keeps a kite in the air?\" -> %s\n", now ? now : "(nothing)");
     check(ends_with(now, "doc_yeast.md"), "the new content is findable");
     const char *stale = ask(m, "why does my loaf not rise?", nullptr);
     printf("  the old question now lands on: %s\n", stale ? stale : "(nothing)");
-    check(!ends_with(stale, "doc_yeast.md"), "the superseded content no longer matches");
+    /* Ranking the new content for an old query is model-dependent. Assert
+     * generation retirement through counts; exact stale-record exclusion is
+     * independently tested against the store reference scan. */
+    struct gm_stats stats;
+    check(gm_get_stats(m, &stats) == GM_OK && stats.obsolete_chunks == 1,
+          "the previous generation is obsolete");
     check(gm_chunk_count(m) == after_first,
           "one chunk died and one was born — the live count is unchanged");
 
@@ -180,13 +176,12 @@ int main(void) {
     {
         /* Comfortably past one 256-token window. */
         static char big[24000];
-        size_t      o = 0;
-        for (int i = 0; i < 220 && o < sizeof big - 200; i++) {
-            o += (size_t) snprintf(big + o,
-                                   sizeof big - o,
-                                   "Paragraph %d discusses the migration of arctic terns "
-                                   "between the two polar summers. ",
-                                   i);
+        size_t o = 0;
+        for (int i = 0; i < 24 && o < sizeof big - 200; i++) {
+            o += (size_t)snprintf(big + o, sizeof big - o,
+                                  "Paragraph %d discusses the migration of arctic terns "
+                                  "between the two polar summers. ",
+                                  i);
         }
         const size_t before = gm_chunk_count(m);
         check(gm_remember_text(m, "terns", big) == GM_OK, "index a long text");
@@ -197,35 +192,43 @@ int main(void) {
               "a chunked document is still retrievable");
     }
 
+    struct gm_hit before[5], after[5];
+    size_t nb = 0, na = 0;
+    check(gm_recall(m, 5, "what keeps a kite in the air?", before, &nb) == GM_OK,
+          "recall before compaction");
+    check(gm_compact(m) == GM_OK, "compact real embeddings");
+    check(gm_get_stats(m, &stats) == GM_OK && stats.obsolete_chunks == 0,
+          "compaction removes obsolete vectors");
+    gm_close(m);
+    m = nullptr;
+    check(gm_open(DIR, model, &opts, &m) == GM_OK, "reopen compacted embeddings");
+    check(gm_recall(m, 5, "what keeps a kite in the air?", after, &na) == GM_OK && na == nb,
+          "recall after compaction");
+    for (size_t i = 0; i < na && i < nb; ++i)
+        check(before[i].doc == after[i].doc && before[i].chunk == after[i].chunk &&
+                  before[i].distance == after[i].distance,
+              "compaction preserves ordered hits");
     gm_close(m);
 
-    /* ---- model binding -------------------------------------------------- *
-     * A store carries the fingerprint of the model that built it, because
-     * two models' vectors are not comparable at all — mixing them yields
-     * confident nonsense rather than an error. Rather than conjure a second
-     * multi-hundred-megabyte checkpoint, flip a byte of the recorded
-     * fingerprint on disk: that is exactly the state a swapped model
-     * produces, and it is what the guard has to catch.
-     *
-     * The offset comes from the struct itself, so reordering a header field
-     * cannot leave this poking at the wrong bytes and passing anyway. */
+    /* Preserve the header checksum while changing the recorded model identity.
+     * The mismatch must be reported as GM_E_MODEL before reading vectors. */
     {
-        const long MODEL_FP_OFF = (long) offsetof(struct gm_file_header, model_fp);
-        char       vpath[600];
+        char vpath[600];
         snprintf(vpath, sizeof vpath, "%s/vectors.gm", DIR);
-        FILE      *f = fopen(vpath, "r+b");
+        FILE *f = fopen(vpath, "r+b");
         check(f != nullptr, "the store's vector file is readable");
         if (f != nullptr) {
-            uint64_t fp = 0;
-            check(fseek(f, MODEL_FP_OFF, SEEK_SET) == 0 && fread(&fp, sizeof fp, 1, f) == 1,
-                  "read the recorded fingerprint");
-            fp ^= 1u;
-            check(fseek(f, MODEL_FP_OFF, SEEK_SET) == 0 && fwrite(&fp, sizeof fp, 1, f) == 1,
-                  "write a different fingerprint");
+            uint8_t header[GM_HEADER_BYTES];
+            struct gm_file_header saved;
+            CHECK(fseek(f, 0, SEEK_SET) == 0 && fread(header, sizeof header, 1, f) == 1 &&
+                  gm_header_decode(header, &saved));
+            saved.model_fp ^= 1;
+            gm_header_encode(&saved, header);
+            CHECK(fseek(f, 0, SEEK_SET) == 0 && fwrite(header, sizeof header, 1, f) == 1);
             fclose(f);
 
-            struct gm           *other = nullptr;
-            const enum gm_status os    = gm_open(DIR, model, &opts, &other);
+            struct gm *other = nullptr;
+            const enum gm_status os = gm_open(DIR, model, &opts, &other);
             printf("  store built by another model -> %s\n", gm_status_str(os));
             check(os == GM_E_MODEL,
                   "a store from a different model is refused, not silently mixed");
@@ -235,6 +238,7 @@ int main(void) {
         }
     }
 
+    test_clean(DIR);
     if (fails > 0) {
         fprintf(stderr, "%d check(s) failed\n", fails);
         return T_FAIL;

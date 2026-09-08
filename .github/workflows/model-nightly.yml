@@ -1,0 +1,69 @@
+name: Real-model nightly
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '23 2 * * *'
+permissions:
+  contents: read
+concurrency:
+  group: model-nightly-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  model:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 90
+    env:
+      CC: gcc-14
+      CXX: g++-14
+      BACKENDS: cpu_neon
+      GEISTLIB: build/geistlib
+      GEIST_EMBED_GGUF_PATH: ${{ github.workspace }}/build/models/bitnet-embedding-0.6b-geist.gguf
+      QUALITY_HEADER: build/quality/scifact.h
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: geisten/geistlib
+          ref: 32b432660948a50be05b355efa74a789456a37dd
+          path: build/geistlib
+      - run: sudo apt-get update && sudo apt-get install -y gcc-14 g++-14 clang-19
+      - name: Download and verify fixed model and dataset
+        run: |
+          mkdir -p build/models build/quality build/model-results
+          curl --fail --location --retry 3 --max-time 300 'https://huggingface.co/microsoft/bitnet-embedding-0.6b/resolve/459a4718ed183ebbf5d7c89e4908f66322790e9b/bitnet-embeddings-0.6b-bf16-i2_s.gguf' -o build/models/original.gguf
+          make prepare-model BITNET_SOURCE=build/models/original.gguf
+          curl --fail --location --retry 3 --max-time 120 'https://public.ukp.informatik.tu-darmstadt.de/thakur/BEIR/datasets/scifact.zip' -o build/quality/scifact.zip
+          python3 tools/prepare-quality.py build/quality/scifact.zip "$QUALITY_HEADER"
+          python3 -m unittest discover -s test -p test_model_tools.py
+          cp build/quality/scifact.json build/model-results/corpus.json
+          make print-config > build/model-results/config.txt
+          gcc-14 --version >> build/model-results/config.txt
+          uname -a >> build/model-results/config.txt
+      - name: Exact embedding preservation for bounded model load
+        run: make -j4 test-model-equivalence > build/model-results/equivalence.log 2>&1
+      - name: Larger external quality measurement
+        run: |
+          make -j4 bench-model-large > build/model-results/quality.log 2>&1
+          python3 tools/check-model-quality.py build/model-results/quality.log
+      - name: Real application allocation failures
+        run: |
+          make -j4 test-model-alloc test-tokenizer-oom model-memory > build/model-results/memory-build.log 2>&1
+          binary=$(make --no-print-directory print-config | sed -n 's/^BUILD=//p')/test-model-memory
+          sh tools/check-model-memory.sh "$binary" build/model-results/faults
+      - name: Real-model sanitizers and leak check
+        env:
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+          UBSAN_OPTIONS: halt_on_error=1
+        run: |
+          make -j4 CC=clang-19 MODE=asan test-model-alloc test-tokenizer-oom model-memory test-e2e > build/model-results/sanitizers.log 2>&1
+          binary=$(make --no-print-directory CC=clang-19 MODE=asan print-config | sed -n 's/^BUILD=//p')/test-model-memory
+          for at in 0 1 2 3 4 5; do
+            timeout 180 "$binary" open "$at" 8388608 > "build/model-results/asan-large-$at.log" 2>&1
+          done
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: real-model-${{ github.sha }}
+          path: build/model-results/
+          if-no-files-found: error
+          retention-days: 30
