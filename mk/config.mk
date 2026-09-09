@@ -5,7 +5,7 @@ ifdef GEISTLIB
 $(error GEISTLIB is gone; set GEIST_REPO=<url or path> and run make deps)
 endif
 GEIST_REPO ?= https://github.com/geisten/geistlib.git
-GEIST_REV := 9030b783bbbf2a43bd95ca688dc0a3b2e11414b7
+GEIST_REV := b78df97fdb09b937f07082533e970b2d7a16ce83
 ENGINE_PATCH := patches/geistlib-compat.patch
 ENGINE_PATCH_ID := $(shell cksum $(ENGINE_PATCH) | cut -d' ' -f1)
 TARGET ?= $(shell uname -s | tr A-Z a-z)-$(shell uname -m)

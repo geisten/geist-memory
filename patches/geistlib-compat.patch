@@ -83,18 +83,6 @@
              int8x16x2_t t1_lut, t2_lut, t3_lut;
              t1_lut.val[0]    = vld1q_s8(PTQTP_3P_T1_LUT);
              t1_lut.val[1]    = vld1q_s8(PTQTP_3P_T1_LUT + 16);
---- a/src/archs/transformer/arch_state.h
-+++ b/src/archs/transformer/arch_state.h
-@@ -154,7 +154,8 @@
-      * The structs above carry .buffer pointers but the LIST OF buffers we
-      * created is stored here so cleanup is unambiguous and order-stable.
-      * NULL slots denote "not allocated" (e.g. k_proj_buf for kv_shared). */
--    struct geist_buffer *bufs[16];
-+    /* BitNet embedding layers own 18 tensors, including projection norms. */
-+    struct geist_buffer *bufs[24];
-     size_t               n_bufs;
- };
- 
 --- a/src/formats/ptqtp/ptqtp_kernel.c
 +++ b/src/formats/ptqtp/ptqtp_kernel.c
 @@ -289,7 +289,7 @@
@@ -106,16 +94,6 @@
  #define B0(b)                                                                          \
      ((uint8_t) ((b) & 1)), ((uint8_t) (((b) >> 1) & 1)), ((uint8_t) (((b) >> 2) & 1)), \
              ((uint8_t) (((b) >> 3) & 1)), ((uint8_t) (((b) >> 4) & 1)),                \
---- a/src/archs/transformer/arch_state.c
-+++ b/src/archs/transformer/arch_state.c
-@@ -1587,6 +1587,7 @@
-          * once below. */
-         struct geist_buffer *infra[] = {
-                 sess->scratch_normed,
-+                sess->scratch_proj_in,
-                 sess->scratch_q,
-                 sess->scratch_k,
-                 sess->scratch_v,
 --- a/src/base/hw_probe.c
 +++ b/src/base/hw_probe.c
 @@ -56,3 +56,3 @@
