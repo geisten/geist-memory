@@ -77,7 +77,8 @@ Python 3.11+ standard-library tool to prepare this exact SHA-pinned input:
 
 This Python tool is optional model setup, not a dependency of library builds or
 model-free tests. Model weights remain outside the repository and packages.
-The required engine corrections are described in [patches/README.md](../patches/README.md).
+The engine corrections this once required are upstream in geistlib (#415, #418,
+#419, #420); the pinned engine is built unmodified.
 
 ```sh
 mkdir -p build/models

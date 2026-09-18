@@ -5,9 +5,9 @@ ifdef GEISTLIB
 $(error GEISTLIB is gone; set GEIST_REPO=<url or path> and run make deps)
 endif
 GEIST_REPO ?= https://github.com/geisten/geistlib.git
-GEIST_REV := b78df97fdb09b937f07082533e970b2d7a16ce83
-ENGINE_PATCH := patches/geistlib-compat.patch
-ENGINE_PATCH_ID := $(shell cksum $(ENGINE_PATCH) | cut -d' ' -f1)
+# geistlib main. Every correction this repository used to carry as a patch is
+# upstream (geistlib #415, #418, #419, #420), so the engine is used unmodified.
+GEIST_REV := 18a52c303421a4dd145002ac13c479bb77a8a900
 TARGET ?= $(shell uname -s | tr A-Z a-z)-$(shell uname -m)
 BACKENDS ?= cpu_scalar
 GEMM_PROVIDER ?= native
@@ -91,7 +91,7 @@ endif
 ENGINE_LINK_LIBS := $(ENGINE_SYSTEM_LIBS) $(LDLIBS)
 
 # Content-derived build directories prevent stale objects on configuration changes.
-CONFIG := $(shell printf '%s\n' '$(CC)|$(shell $(CC) --version | head -1)|$(TARGET)|$(MODE)|$(CPPFLAGS)|$(CFLAGS)|$(LDFLAGS)|$(LDLIBS)|$(BACKENDS)|$(GEMM_PROVIDER)|$(LINK)|$(GEIST_REV)|$(ENGINE_PATCH_ID)|$(ENGINE_FLAGS)|$(AR)|$(RANLIB)|$(COMPILER_TARGET)|$(shell cksum Makefile mk/config.mk)' | cksum | cut -d' ' -f1)
+CONFIG := $(shell printf '%s\n' '$(CC)|$(shell $(CC) --version | head -1)|$(TARGET)|$(MODE)|$(CPPFLAGS)|$(CFLAGS)|$(LDFLAGS)|$(LDLIBS)|$(BACKENDS)|$(GEMM_PROVIDER)|$(LINK)|$(GEIST_REV)|$(ENGINE_FLAGS)|$(AR)|$(RANLIB)|$(COMPILER_TARGET)|$(shell cksum Makefile mk/config.mk)' | cksum | cut -d' ' -f1)
 BUILD := build/$(TARGET)/$(MODE)/$(CONFIG)
 LIB := $(BUILD)/libgeist_memory.a
 ADAPTER_LIB := $(BUILD)/libgeist_memory_geist.a
