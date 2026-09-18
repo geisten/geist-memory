@@ -50,9 +50,9 @@ analyze:
 	@for source in $(CORE) test/quality.c test/bench_model.c; do $(CC) --analyze -Werror -std=c23 -D_POSIX_C_SOURCE=200809L -D_DARWIN_C_SOURCE -D_DEFAULT_SOURCE -Iinclude -Isrc -Itest -Xanalyzer -analyzer-werror -Xanalyzer -analyzer-output=text $$source -o $(BUILD)/analysis/$$(basename $$source).plist || exit; done
 # Explicit fetch; nothing runs at parse time and no other target fetches.
 deps:
-	sh tools/fetch-dep.sh geistlib '$(GEIST_REPO)' $(GEIST_REV) $(ENGINE_PATCH)
+	sh tools/fetch-dep.sh geistlib '$(GEIST_REPO)' $(GEIST_REV)
 check-engine:
-	@test "$$(cat $(ENGINE_SRC)/.fetch-dep 2>/dev/null)" = '$(GEIST_REV) $(ENGINE_PATCH_ID)' || \
+	@test "$$(cat $(ENGINE_SRC)/.fetch-dep 2>/dev/null)" = '$(GEIST_REV) unpatched' || \
 	    { echo 'engine source missing or stale: run make deps'; exit 1; }
 # The script is shared verbatim across geist repositories; geistlib holds the reference.
 check-deps: check-engine
@@ -70,7 +70,7 @@ $(BUILD)/test_gm_e2e: test/test_gm_e2e.c test/test_support.c $(GEIST_LIBS)
 test-e2e: check-model $(BUILD)/test_gm_e2e
 	GEIST_EMBED_GGUF_PATH='$(GEIST_EMBED_GGUF_PATH)' $(BUILD)/test_gm_e2e
 print-config:
-	@printf '%s\n' 'TARGET=$(TARGET)' 'CC=$(CC)' 'MODE=$(MODE)' 'LINK=$(LINK)' 'BACKENDS=$(BACKENDS)' 'GEMM_PROVIDER=$(GEMM_PROVIDER)' 'GEIST_REV=$(GEIST_REV)' 'ENGINE_PATCH_ID=$(ENGINE_PATCH_ID)' 'BUILD=$(BUILD)'
+	@printf '%s\n' 'TARGET=$(TARGET)' 'CC=$(CC)' 'MODE=$(MODE)' 'LINK=$(LINK)' 'BACKENDS=$(BACKENDS)' 'GEMM_PROVIDER=$(GEMM_PROVIDER)' 'GEIST_REV=$(GEIST_REV)' 'BUILD=$(BUILD)'
 help:
 	@printf '%s\n' 'make [lib]          static geist-memory archive' 'make check          model-free tests + C/C++ headers' \
 	 'make MODE=asan check ASan + UBSan tests' 'make analyze        Clang static analysis' \
@@ -98,10 +98,9 @@ $(BUILD)/memory: examples/memory.c $(GEIST_LIBS)
 .PHONY: example
 example: $(BUILD)/memory
 install: $(GEIST_LIBS)
-	install -d '$(DESTDIR)$(PREFIX)/include' '$(DESTDIR)$(PREFIX)/lib/pkgconfig' '$(DESTDIR)$(PREFIX)/share/doc/geist-memory/docs' '$(DESTDIR)$(PREFIX)/share/doc/geist-memory/patches'
+	install -d '$(DESTDIR)$(PREFIX)/include' '$(DESTDIR)$(PREFIX)/lib/pkgconfig' '$(DESTDIR)$(PREFIX)/share/doc/geist-memory/docs'
 	install -m 644 LICENSE README.md PLAN.md CHANGELOG.md CONTRIBUTING.md '$(DESTDIR)$(PREFIX)/share/doc/geist-memory/'
 	install -m 644 docs/*.md '$(DESTDIR)$(PREFIX)/share/doc/geist-memory/docs/'
-	install -m 644 patches/*.patch patches/*.md '$(DESTDIR)$(PREFIX)/share/doc/geist-memory/patches/'
 	install -m 644 $(ENGINE_SRC)/LICENSE '$(DESTDIR)$(PREFIX)/share/doc/geist-memory/GEIST-LICENSE'
 	install -m 644 $(ENGINE_SRC)/NOTICE '$(DESTDIR)$(PREFIX)/share/doc/geist-memory/GEIST-NOTICE'
 	install -m 644 include/geist_memory.h include/geist_memory_embedder.h '$(DESTDIR)$(PREFIX)/include/'

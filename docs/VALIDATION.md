@@ -5,9 +5,10 @@ in the sandbox. Engine revision: `32b432660948a50be05b355efa74a789456a37dd`
 (pin moved to `9030b783bbbf2a43bd95ca688dc0a3b2e11414b7` on 2026-09-07; the diff
 adds only `tools/fetch-dep.sh`, so these runs remain valid);
 Reference backend `cpu_scalar`, native GEMM, no OpenMP. The subsequent Pi model
-run explicitly selects `cpu_neon`. The engine now includes the checksum-bound
-compatibility patch documented in patches/README.md. The final patch SHA-256 is
-`be7906dd54c7e86a57d2c1c840cd746ac6b51a62b1448f67f56efcb69815a1c2`.
+run explicitly selects `cpu_neon`. These runs applied a checksum-bound
+compatibility patch on top of the engine. Every correction in it is upstream
+since geistlib #415, #418, #419 and #420, so the patch is gone and the engine is
+built unmodified from the pinned revision.
 Results refer to the current unreleased implementation, not to a released platform support promise.
 
 ## Completed locally
