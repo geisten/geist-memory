@@ -33,10 +33,10 @@ make print-config
 ```
 
 `make deps` is the only step that fetches anything: `tools/fetch-dep.sh` clones
-`GEIST_REPO` into `build/deps/geistlib`, checks out commit
-`9030b783bbbf2a43bd95ca688dc0a3b2e11414b7` detached and applies the compat
-patch. No other target fetches; a missing or stale tree stops the build with
-`run make deps`. The pin lives only in `mk/config.mk`. `make lib`
+`GEIST_REPO` into `build/deps/geistlib`, checks out the pinned commit detached
+and applies the compat patch. No other target fetches; a missing or stale tree
+stops the build with `run make deps`. The pin lives only in `mk/config.mk`
+(`GEIST_REV`) — read it there rather than from a copy that can drift. `make lib`
 builds `libgeist_memory.a` and needs no geistlib; `make adapter` builds
 `libgeist_memory_geist.a`, the geistlib embedder; `make engine` builds
 `libgeist.a`. Artifacts live under `build/<target>/<mode>/<configuration>/`.
